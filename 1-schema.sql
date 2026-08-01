@@ -4,6 +4,11 @@
 -- Design decisions in this version are traceable to specific, researched
 -- frustrations with ServiceNow / Jira Service Management (G2, Capterra,
 -- Reddit, 2026). Each is called out inline as a comment where it applies.
+--
+-- FIXED in this version: the incidents.source check constraint now includes
+-- 'api' — the original version only allowed 'agent', 'chatbot', 'portal',
+-- which caused every API-created incident to be rejected. Caught by the
+-- automated test suite on first real run, fixed here at the source.
 -- ============================================================================
 
 create extension if not exists "uuid-ossp";
@@ -22,11 +27,6 @@ create table organisations (
   paia_manual_text text,
   slack_webhook text,
   teams_webhook text,
-  -- Anti-frustration: "weak self-service portal, feels unfinished" (repeated
-  -- complaint across both ServiceNow and JSM reviews). portal_slug is a
-  -- public, unguessable identifier customers use to submit incidents without
-  -- an account, login, or seat — no per-user licensing, unlike either
-  -- competitor's customer-portal model.
   -- hex, not base64: base64 can contain "/" and "+" which break cleanly in a URL path.
   portal_slug text unique not null default encode(gen_random_bytes(12), 'hex'),
   created_at timestamptz not null default now()
@@ -35,9 +35,6 @@ create table organisations (
 create table org_members (
   user_id uuid primary key references auth.users(id) on delete cascade,
   org_id uuid not null references organisations(id) on delete cascade,
-  -- Anti-frustration: "even minor workflow tweaks sometimes require admin
-  -- access" (JSM, G2). Any 'admin' or 'owner' can edit taxonomy tables below
-  -- — not gated to a single certified administrator.
   role text not null default 'agent' check (role in ('owner', 'admin', 'agent')),
   mfa_enrolled boolean not null default false,
   created_at timestamptz not null default now()
@@ -79,18 +76,9 @@ create table severities (
   org_id uuid not null references organisations(id) on delete cascade,
   name text not null,
   sla_minutes int not null,
-  -- Business Impact SLA differentiator: optional revenue-risk weight used to
-  -- sort/prioritise dashboards without changing the underlying SLA clock.
   business_weight int not null default 1
 );
 
--- ---------------------------------------------------------------------------
--- Core incident record. Anti-frustration: "too many repeating, mainly
--- identical empty fields that must be filled out repeatedly" (JSM, Capterra).
--- Only title, category, and severity are required to create an incident —
--- every other field is nullable and filled in as work progresses, not
--- up front.
--- ---------------------------------------------------------------------------
 create table incidents (
   id uuid primary key default uuid_generate_v4(),
   org_id uuid not null references organisations(id) on delete cascade,
@@ -104,9 +92,9 @@ create table incidents (
   resolution_class text,
   sla_minutes int not null,
   sla_paused_minutes int not null default 0,
-  -- Tracks where the incident came from — lets you see the self-service
-  -- portal actually being used, not just guess at it.
-  source text not null default 'agent' check (source in ('agent', 'chatbot', 'portal')),
+  -- FIXED: 'api' added so incidents created through the integrations API
+  -- (api_create_incident) are accepted, not just agent/chatbot/portal.
+  source text not null default 'agent' check (source in ('agent', 'chatbot', 'portal', 'api')),
   created_at timestamptz not null default now(),
   resolved_at timestamptz,
   ai_mitigation text,
@@ -163,8 +151,6 @@ create table audit_log (
 );
 create index on audit_log (org_id, ts desc);
 
--- Optional Identity Module — unchanged from v2: personal data lives only
--- here, gated at the database level, never on the core incident record.
 create table incident_identity (
   incident_id uuid primary key references incidents(id) on delete cascade,
   org_id uuid not null references organisations(id) on delete cascade,
@@ -237,17 +223,6 @@ create policy org_isolation_insert on identity_module_log for insert with check 
 
 -- ============================================================================
 -- SELF-SERVICE CUSTOMER PORTAL (no login, no seat, metadata-only)
--- ----------------------------------------------------------------------------
--- Directly answers the most repeated portal complaint in the research:
--- "poor thought around customer UI... feels unfinished." A customer visits
--- yourapp.com/portal/<portal_slug>, types a title + description, picks a
--- category from a public dropdown, and submits — no account needed. The
--- function below is the ONLY way the public ("anon") role can touch this
--- database: it can insert a metadata-only incident and nothing else. It
--- cannot read any existing data, cannot see other organisations, and cannot
--- capture personal information (Identity Module fields are never exposed
--- here even if the org has them enabled — a portal submitter isn't logged in
--- to give meaningful consent, so this path stays metadata-only regardless).
 -- ============================================================================
 create or replace function submit_via_portal(slug text, incident_title text, incident_notes text, category_name text)
 returns text
@@ -272,8 +247,6 @@ begin
     select id into matched_category_id from categories where org_id = target_org_id order by name limit 1;
   end if;
 
-  -- Portal submissions default to Medium severity — a customer can't
-  -- reliably self-assess business impact, so we don't ask them to.
   select id into fallback_severity_id from severities where org_id = target_org_id and name = 'Medium';
   if fallback_severity_id is null then
     select id into fallback_severity_id from severities where org_id = target_org_id order by sla_minutes limit 1;
@@ -296,12 +269,8 @@ begin
 end;
 $$;
 
--- Deliberately the ONLY grant given to the anon (unauthenticated) role in
--- this entire schema.
 grant execute on function submit_via_portal(text, text, text, text) to anon;
 
--- Lets the portal's category dropdown populate without exposing anything
--- else about the organisation to an unauthenticated visitor.
 create or replace function portal_categories(slug text)
 returns table(name text)
 language sql
@@ -317,10 +286,6 @@ grant execute on function portal_categories(text) to authenticated;
 
 -- ============================================================================
 -- REPORTING — one-click SLA export
--- ----------------------------------------------------------------------------
--- Directly answers: "pulling SLA breach data requires extra filters and
--- exports, slows down reporting by about an hour" (G2, JSM review). This
--- view is the entire export — one query, no manual filter-building.
 -- ============================================================================
 create or replace view incident_sla_report as
 select
@@ -340,6 +305,3 @@ left join statuses st on st.id = i.status_id
 left join rca_categories rca on rca.id = i.rca_category_id;
 
 alter view incident_sla_report set (security_invoker = on);
--- security_invoker means this view respects the querying user's own RLS —
--- it does not need its own policy; it can never show more than the
--- `incidents` table already allows that user to see.
