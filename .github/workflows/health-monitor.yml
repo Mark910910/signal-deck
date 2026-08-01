@@ -1,0 +1,41 @@
+name: "Agent 3: Health monitor"
+
+# Runs the same kind of checks as the in-app Diagnostics panel, but on its
+# own schedule, without you clicking anything. If something is broken, it
+# opens a GitHub Issue automatically — GitHub emails you about new issues by
+# default, so this is how you'd find out even if you never opened the repo.
+on:
+  schedule:
+    - cron: "0 7 * * *" # daily
+  workflow_dispatch: {}
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check database is reachable
+        id: db
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "apikey: ${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            "${{ secrets.VITE_SUPABASE_URL }}/rest/v1/organisations?select=id&limit=1")
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Check the deployed app is reachable
+        id: app
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" "${{ secrets.DEPLOYED_APP_URL }}")
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Open an issue if anything failed
+        if: steps.db.outputs.status >= '400' || steps.app.outputs.status >= '400'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Signal Deck health check failed — ${new Date().toISOString().slice(0,10)}`,
+              body: `Automated daily health check found a problem.\n\n- Database response: ${{ steps.db.outputs.status }}\n- App response: ${{ steps.app.outputs.status }}\n\nOpen the app's Diagnostics tab for a full plain-language breakdown, or send this issue to Claude.`,
+              labels: ["automated-health-check"],
+            });

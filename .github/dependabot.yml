@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # Agent 4: Security patcher. Built into GitHub, free, no setup beyond this
+  # file existing. It checks your dependencies weekly and opens a Pull
+  # Request automatically when one has a known security issue — you only
+  # need to glance at the PR and click "Merge," never write code.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

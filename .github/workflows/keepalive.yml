@@ -1,0 +1,25 @@
+name: "Agent 1: Uptime keeper"
+
+# Runs itself every 3 days, forever, with zero input from you. Its only job
+# is to make one real database request so Supabase's free tier never sees
+# 7 days of silence and pauses the project. This replaces needing a separate
+# UptimeRobot account — one less thing to sign up for.
+on:
+  schedule:
+    - cron: "0 6 */3 * *"
+  workflow_dispatch: {} # lets you also trigger it manually from the GitHub UI if you ever want to
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Touch the database
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "apikey: ${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            "${{ secrets.VITE_SUPABASE_URL }}/rest/v1/organisations?select=id&limit=1")
+          echo "Supabase responded with HTTP $status"
+          if [ "$status" -ge 400 ]; then
+            echo "::error::Supabase did not respond as expected — check that the project is still active."
+            exit 1
+          fi

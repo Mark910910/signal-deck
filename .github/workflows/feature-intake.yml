@@ -1,0 +1,52 @@
+name: "Agent 6: Feature intake"
+
+# The boundary this agent respects deliberately: it drafts a plan and checks
+# it against your founding principles (free, no-code, metadata-only-by-
+# default, one stack). It never opens a Pull Request and never touches the
+# codebase. Turning a drafted plan into real, tested code is still a
+# conversation with Claude — that step needs judgment this agent doesn't
+# have, and you have no second technical reviewer to catch it if it's wrong.
+on:
+  issues:
+    types: [opened, labeled]
+
+jobs:
+  draft-spec:
+    if: contains(github.event.issue.labels.*.name, 'feature-request')
+    runs-on: ubuntu-latest
+    env:
+      # Routing untrusted issue text through an env var, then reading it with
+      # jq rather than interpolating it into the script text directly, avoids
+      # a known script-injection risk: a feature request that happened to
+      # contain shell metacharacters could otherwise run as commands.
+      ISSUE_BODY: ${{ github.event.issue.body }}
+      SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+    steps:
+      - name: Ask the AI to draft a plan
+        run: |
+          SYSTEM_PROMPT="You triage feature requests for a small ITSM tool called Signal Deck, built on Supabase + Cloudflare Pages + Groq only, free-tier only, no other paid services, metadata-only data storage by default (an optional Identity Module gates any personal data), and the business owner has no coding experience — all implementation is done by Claude in conversation, never by an automated agent. Given a feature request, write: 1) a one-paragraph restatement of the need, 2) a rough implementation approach in plain language, 3) any conflict with the principles above (cost, new external services, personal-data handling), 4) a t-shirt size estimate (small/medium/large). Keep it under 200 words. Do not write code."
+
+          PAYLOAD=$(jq -n --arg sys "$SYSTEM_PROMPT" --arg user "$ISSUE_BODY" '{system: $sys, user: $user}')
+
+          RESPONSE=$(curl -s -X POST "$SUPABASE_URL/functions/v1/groq-proxy" \
+            -H "Content-Type: application/json" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -d "$PAYLOAD")
+
+          echo "$RESPONSE" | jq -r '.text // .error // "No response from AI proxy."' > draft.txt
+          cat draft.txt
+
+      - name: Post the draft as a comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const draft = fs.readFileSync('draft.txt', 'utf8');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `**Draft plan (AI-generated, not implemented yet)**\n\n${draft}\n\n---\n_This is a starting point, not a decision. Bring this issue to Claude to actually design and build it — this agent only drafts, it never writes or ships code._`,
+            });

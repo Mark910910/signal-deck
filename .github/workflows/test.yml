@@ -1,0 +1,63 @@
+name: Signal Deck automated tests
+
+# Runs automatically on every push — nothing to run by hand. Check the
+# little icon next to your latest commit on GitHub: a green check mark
+# means everything below passed; a red X means something broke, and the
+# "Details" link shows exactly which check failed and why.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  frontend-build:
+    name: App builds without errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm install
+      - name: Build
+        run: npm run build
+        env:
+          # Dummy values — this job only proves the code compiles cleanly,
+          # it never talks to a real database.
+          VITE_SUPABASE_URL: "https://placeholder.supabase.co"
+          VITE_SUPABASE_ANON_KEY: "placeholder"
+
+  database-schema:
+    name: Database schema, security, and functions are correct
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply auth-service stub (CI only — Supabase provides the real thing in production)
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f tests/stub-auth-schema.sql
+      - name: Apply schema
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f 1-schema.sql
+      - name: Apply bootstrap functions
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f 2-bootstrap.sql
+      - name: Apply integrations layer
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f 3-integrations.sql
+      - name: Apply preventative action tracking
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f 4-preventatives.sql
+      - name: Apply custom dashboards
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f 5-dashboards.sql
+      - name: Run assertions (tables, RLS, functions, end-to-end sign-up)
+        run: psql "postgresql://postgres:postgres@localhost:5432/postgres" -v ON_ERROR_STOP=1 -f tests/assertions.sql

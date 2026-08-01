@@ -1,0 +1,27 @@
+name: "Agent 2: Backup keeper"
+
+# Supabase's free tier does not include automatic backups — that's only on
+# paid plans. This closes that real gap for free: once a week, it takes a
+# full snapshot of your database and stores it privately in this repository
+# as a workflow artifact, encrypted at rest by GitHub, visible only to you.
+on:
+  schedule:
+    - cron: "0 3 * * 0" # every Sunday
+  workflow_dispatch: {}
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Dump database
+        run: |
+          pg_dump "${{ secrets.SUPABASE_DB_CONNECTION_STRING }}" \
+            --no-owner --no-privileges -F c -f signal-deck-backup.dump
+      - name: Upload backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-deck-backup-${{ github.run_id }}
+          path: signal-deck-backup.dump
+          retention-days: 90
