@@ -26,7 +26,7 @@ jobs:
           sudo apt-get install -y postgresql-client-17
       - name: Dump database
         run: |
-          pg_dump "${{ secrets.SUPABASE_DB_CONNECTION_STRING }}" \
+          /usr/lib/postgresql/17/bin/pg_dump "${{ secrets.SUPABASE_DB_CONNECTION_STRING }}" \
             --no-owner --no-privileges -F c -f signal-deck-backup.dump
       - name: Upload backup
         uses: actions/upload-artifact@v4
