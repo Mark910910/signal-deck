@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   AlertTriangle, Clock, CheckCircle2, Radio, Search, Settings as SettingsIcon,
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
-  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical
+  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 import { supabase } from "./supabaseClient.js";
@@ -46,10 +46,10 @@ export default function App() {
 
   const loadOrg = useCallback(async () => {
     setCheckingOrg(true);
-    const { data: member } = await supabase.from("org_members").select("org_id, role").maybeSingle();
+    const { data: member } = await supabase.from("org_members").select("org_id, role, resolver_group_id").maybeSingle();
     if (member) {
       const { data: orgRow } = await supabase.from("organisations").select("*").eq("id", member.org_id).maybeSingle();
-      setOrg(orgRow ? { ...orgRow, myRole: member.role } : null);
+      setOrg(orgRow ? { ...orgRow, myRole: member.role, myResolverGroupId: member.resolver_group_id } : null);
     } else {
       setOrg(null);
     }
@@ -187,16 +187,17 @@ function MainApp({ org, onOrgUpdated }) {
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
 
   const loadLookups = useCallback(async () => {
-    const [rg, cat, st, sv, rca] = await Promise.all([
+    const [rg, cat, st, sv, rca, cf] = await Promise.all([
       supabase.from("resolver_groups").select("*").order("name"),
       supabase.from("categories").select("*").order("name"),
       supabase.from("statuses").select("*").order("sort_order"),
       supabase.from("severities").select("*"),
       supabase.from("rca_categories").select("*").order("sort_order"),
+      supabase.from("custom_fields").select("*").order("sort_order"),
     ]);
     setLookups({
       resolverGroups: rg.data || [], categories: cat.data || [], statuses: st.data || [],
-      severities: sv.data || [], rcaCategories: rca.data || [],
+      severities: sv.data || [], rcaCategories: rca.data || [], customFields: cf.data || [],
     });
   }, []);
 
@@ -204,7 +205,7 @@ function MainApp({ org, onOrgUpdated }) {
     const { data, error } = await supabase
       .from("incidents")
       .select(`*, category:categories(id,name), severity:severities(id,name,sla_minutes,business_weight), status:statuses(id,name), rca_category:rca_categories(id,name),
-                incident_assignments(*, resolver_groups(name)), incident_timeline(*), escalations(*), incident_identity(*)`)
+                incident_assignments(*, resolver_groups(name, channel_slack_webhook, channel_teams_webhook)), incident_timeline(*), escalations(*), incident_identity(*), incident_custom_values(*)`)
       .order("created_at", { ascending: false });
     if (!error) setIncidents(data || []);
   }, []);
@@ -251,7 +252,7 @@ function MainApp({ org, onOrgUpdated }) {
 
         <main className="flex-1 min-w-0">
           {tab === "deck" && <Deck incidents={incidents} lookups={lookups} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }} />}
-          {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} tick={tick} onSelect={setSelectedId} />}
+          {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} onSelect={setSelectedId} />}
           {tab === "incidents" && selected && (
             <IncidentDetail incident={selected} lookups={lookups} org={org} tick={tick}
               onBack={() => setSelectedId(null)} onChanged={loadIncidents} showToast={showToast} />
@@ -394,14 +395,24 @@ function StatCard({ icon: Icon, label, value, color }) {
 }
 
 /* =============================== INCIDENT LIST ============================== */
-function IncidentList({ incidents, tick, onSelect }) {
+function IncidentList({ incidents, lookups, org, tick, onSelect }) {
   const [filter, setFilter] = useState("open");
   const [query, setQuery] = useState("");
   const [range, setRange] = useState("all");
+  // Defaults to the signed-in member's own team queue if they belong to
+  // one — a smart default, not a hard wall. Anyone can switch to "All" in
+  // one click. This is the direct fix for "no visibility into workload...
+  // hard to see who's working on what" without recreating Jira/ServiceNow's
+  // notification sprawl where everyone gets CC'd on everything regardless.
+  const [scope, setScope] = useState(org?.myResolverGroupId ? "mine" : "all");
 
   let list = incidents;
   if (filter === "open") list = list.filter((i) => !i.resolved_at);
   if (filter === "resolved") list = list.filter((i) => i.resolved_at);
+
+  if (scope === "mine" && org?.myResolverGroupId) {
+    list = list.filter((i) => (i.incident_assignments || []).some((a) => a.resolver_group_id === org.myResolverGroupId));
+  }
 
   if (range !== "all") {
     const days = { "7d": 7, "30d": 30, "90d": 90 }[range];
@@ -421,7 +432,8 @@ function IncidentList({ incidents, tick, onSelect }) {
       i.category?.name?.toLowerCase().includes(q) ||
       i.severity?.name?.toLowerCase().includes(q) ||
       i.rca_category?.name?.toLowerCase().includes(q) ||
-      i.resolution_class?.toLowerCase().includes(q)
+      i.resolution_class?.toLowerCase().includes(q) ||
+      (i.incident_custom_values || []).some((v) => v.value?.toLowerCase().includes(q))
     );
   }
 
@@ -433,6 +445,16 @@ function IncidentList({ incidents, tick, onSelect }) {
           placeholder="Search title, notes, reference number, category, root cause…"
           className="w-full pl-9 pr-3 py-2.5 rounded-lg text-sm" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
       </div>
+      {org?.myResolverGroupId && (
+        <div className="flex gap-1.5 mb-3">
+          {[["mine", "My Group"], ["all", "All Groups"]].map(([val, label]) => (
+            <button key={val} onClick={() => setScope(val)} className="px-3 py-1.5 rounded-full text-xs font-medium"
+              style={{ background: scope === val ? COLORS.teal + "22" : COLORS.surface, color: scope === val ? COLORS.teal : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex gap-1.5">
           {["open", "resolved", "all"].map((f) => (
@@ -484,7 +506,7 @@ function NewIncident({ lookups, org, onCreated }) {
   );
 }
 
-async function insertIncident({ title, notes, categoryId, severityId, slaMinutes, resolverGroupIds, org, identity }) {
+async function insertIncident({ title, notes, categoryId, severityId, slaMinutes, resolverGroupIds, org, identity, customValues }) {
   const displayId = `INC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
   const { data: statusRow } = await supabase.from("statuses").select("id").eq("org_id", org.id).order("sort_order").limit(1).maybeSingle();
 
@@ -508,6 +530,17 @@ async function insertIncident({ title, notes, categoryId, severityId, slaMinutes
       consent_given: identity.consent, consent_ts: identity.consent ? new Date().toISOString() : null,
     });
   }
+
+  if (customValues && Object.keys(customValues).length > 0) {
+    const rows = Object.entries(customValues).filter(([, v]) => v !== "" && v != null).map(([fieldId, value]) => ({
+      incident_id: inc.id, custom_field_id: fieldId, org_id: org.id,
+      // Same redaction applied to every other free-text field in the app —
+      // a custom field is not an exception to the metadata-safety rule.
+      value: redactPII(String(value)),
+    }));
+    if (rows.length) await supabase.from("incident_custom_values").insert(rows);
+  }
+
   return inc;
 }
 
@@ -522,22 +555,28 @@ function IncidentForm({ lookups, org, onCreated }) {
   const [consent, setConsent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warn, setWarn] = useState(false);
+  const [customValues, setCustomValues] = useState({});
 
   const hasContact = customerName.trim() || customerContact.trim();
 
   function toggleGroup(id) {
     setResolverGroupIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }
+  function setCustomValue(fieldId, value) {
+    setCustomValues((prev) => ({ ...prev, [fieldId]: value }));
+  }
 
   async function submit() {
     if (!title.trim() || !categoryId || !severityId) return;
     if (org.identity_module_enabled && hasContact && !consent) { setWarn(true); return; }
+    const missingRequired = (lookups.customFields || []).find((f) => f.required && !customValues[f.id]);
+    if (missingRequired) { setWarn(false); return; }
     setSaving(true);
     const sev = lookups.severities.find((s) => s.id === severityId);
     try {
       await insertIncident({
         title, notes, categoryId, severityId, slaMinutes: sev.sla_minutes, resolverGroupIds, org,
-        identity: { customerName, customerContact, consent },
+        identity: { customerName, customerContact, consent }, customValues,
       });
       await onCreated();
     } finally { setSaving(false); }
@@ -585,6 +624,13 @@ function IncidentForm({ lookups, org, onCreated }) {
       )}
       {!org.identity_module_enabled && (
         <p className="text-[11px] mb-2" style={{ color: COLORS.faint }}>Identity Module is off — this incident will be logged as metadata only, with no name or contact details. Turn it on in Settings if you need to capture that.</p>
+      )}
+      {(lookups.customFields || []).length > 0 && (
+        <div className="mb-1">
+          {lookups.customFields.map((f) => (
+            <CustomFieldInput key={f.id} field={f} value={customValues[f.id] || ""} onChange={(v) => setCustomValue(f.id, v)} />
+          ))}
+        </div>
       )}
       <button onClick={submit} disabled={saving || !title.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm mt-1" style={{ background: COLORS.amber, color: "#1A1200" }}>
         {saving ? "Logging…" : "Log Incident"}
@@ -693,17 +739,32 @@ function IncidentDetail({ incident, lookups, org, onBack, onChanged, showToast }
     showToast("Incident resolved"); onChanged();
   }
 
+  async function acknowledge() {
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from("incidents").update({ acknowledged_at: new Date().toISOString(), acknowledged_by: session?.user?.id || null }).eq("id", incident.id);
+    await supabase.from("incident_timeline").insert({ incident_id: incident.id, org_id: org.id, note: "Acknowledged" });
+    showToast("Acknowledged"); onChanged();
+  }
+
   async function escalate(channel) {
-    const groupId = incident.incident_assignments?.[0]?.resolver_group_id;
-    const url = channel === "Slack" ? org.slack_webhook : channel === "Teams" ? org.teams_webhook : null;
+    const assignment = incident.incident_assignments?.[0];
+    const groupId = assignment?.resolver_group_id;
+    const groupWebhook = channel === "Slack" ? assignment?.resolver_groups?.channel_slack_webhook : channel === "Teams" ? assignment?.resolver_groups?.channel_teams_webhook : null;
+    const orgWebhook = channel === "Slack" ? org.slack_webhook : channel === "Teams" ? org.teams_webhook : null;
+    // The specific team's own saved webhook wins if they have one — this is
+    // the real fix for every resolver group's alerts landing in the same
+    // place, using an actual foreign key rather than matching names between
+    // systems the way the ServiceNow<->Jira team sync does.
+    const url = groupWebhook || orgWebhook;
     let delivered = "simulated";
-    if (url) { try { await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `Escalation: ${incident.display_id} — ${incident.title}` }) }); delivered = "sent"; } catch { delivered = "simulated (blocked)"; } }
+    if (url) { try { await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `Escalation: ${incident.display_id} — ${incident.title}` }) }); delivered = groupWebhook ? "sent to team channel" : "sent to org channel"; } catch { delivered = "simulated (blocked)"; } }
     await supabase.from("escalations").insert({ incident_id: incident.id, org_id: org.id, resolver_group_id: groupId, channel, kind: "escalation", delivered });
     showToast(`${channel} escalation logged (${delivered})`); onChanged();
   }
 
   async function warRoom() {
-    const url = org.slack_webhook || org.teams_webhook;
+    const assignment = incident.incident_assignments?.[0];
+    const url = assignment?.resolver_groups?.channel_slack_webhook || assignment?.resolver_groups?.channel_teams_webhook || org.slack_webhook || org.teams_webhook;
     if (url) fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `🚨 War room: ${incident.display_id} — ${incident.title}` }) }).catch(() => {});
     await supabase.from("escalations").insert({ incident_id: incident.id, org_id: org.id, resolver_group_id: incident.incident_assignments?.[0]?.resolver_group_id, channel: url ? "Slack/Teams" : "Internal", kind: "war_room", delivered: url ? "sent" : "simulated" });
     showToast("War room opened"); onChanged();
@@ -749,6 +810,17 @@ function IncidentDetail({ incident, lookups, org, onBack, onChanged, showToast }
         </div>
         <p className="text-sm mb-2" style={{ color: COLORS.muted }}>{incident.notes}</p>
         <SLABadge incident={incident} />
+        {!incident.resolved_at && (
+          incident.acknowledged_at ? (
+            <div className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: COLORS.teal }}>
+              <Check size={13} /> Acknowledged {new Date(incident.acknowledged_at).toLocaleString()}
+            </div>
+          ) : (
+            <button onClick={acknowledge} className="mt-3 w-full py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.teal + "1c", color: COLORS.teal, border: `1px solid ${COLORS.teal}55` }}>
+              Acknowledge
+            </button>
+          )
+        )}
         {incident.severity?.name === "Critical" && !incident.resolved_at && (
           <button onClick={warRoom} className="mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.red + "1c", color: COLORS.red, border: `1px solid ${COLORS.red}55` }}>
             <Zap size={14} /> Open War Room
@@ -841,6 +913,8 @@ function IncidentDetail({ incident, lookups, org, onBack, onChanged, showToast }
           ) : <p className="text-sm" style={{ color: COLORS.muted }}>No contact details captured for this incident.</p>}
         </Panel>
       )}
+
+      <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
 
       <Panel title="Timeline" icon={Clock}>
         {(incident.incident_timeline || []).sort((a, b) => new Date(a.ts) - new Date(b.ts)).map((t) => (
@@ -1075,6 +1149,12 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
         ))}
         <p className="text-[11px] mt-1" style={{ color: COLORS.faint }}>Business weight doesn't change the SLA clock — it's used to sort the dashboard by revenue risk, not just severity label.</p>
       </Panel>
+
+      <TeamAssignmentPanel org={org} lookups={lookups} showToast={showToast} />
+
+      <CustomFieldsPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+
+      <OnCallPanel org={org} lookups={lookups} showToast={showToast} />
 
       <AutomationRulesPanel org={org} lookups={lookups} showToast={showToast} />
 
@@ -1343,6 +1423,8 @@ function AutomationRulesPanel({ org, lookups, showToast }) {
   const [eventType, setEventType] = useState("incident.created");
   const [categoryId, setCategoryId] = useState("");
   const [severityId, setSeverityId] = useState("");
+  const [resolverGroupId, setResolverGroupId] = useState("");
+  const [actionType, setActionType] = useState("email");
   const [emailTo, setEmailTo] = useState("");
 
   const load = useCallback(async () => {
@@ -1352,14 +1434,16 @@ function AutomationRulesPanel({ org, lookups, showToast }) {
   useEffect(() => { load(); }, [load]);
 
   async function createRule() {
-    if (!label.trim() || !emailTo.trim()) { showToast("Give the rule a name and an email address"); return; }
+    if (!label.trim()) { showToast("Give the rule a name"); return; }
+    if (actionType === "email" && !emailTo.trim()) { showToast("Add an email address for this rule"); return; }
     const { error } = await supabase.from("automation_rules").insert({
       org_id: org.id, label, event_type: eventType,
       filter_category_id: categoryId || null, filter_severity_id: severityId || null,
-      action_email_to: emailTo,
+      filter_resolver_group_id: resolverGroupId || null,
+      action_type: actionType, action_email_to: actionType === "email" ? emailTo : null,
     });
     if (error) { showToast(error.message); return; }
-    setLabel(""); setEmailTo(""); setCategoryId(""); setSeverityId("");
+    setLabel(""); setEmailTo(""); setCategoryId(""); setSeverityId(""); setResolverGroupId("");
     showToast("Automation rule created");
     await load();
   }
@@ -1376,17 +1460,20 @@ function AutomationRulesPanel({ org, lookups, showToast }) {
   function describeRule(r) {
     const cat = lookups.categories.find((c) => c.id === r.filter_category_id);
     const sev = lookups.severities.find((s) => s.id === r.filter_severity_id);
+    const grp = lookups.resolverGroups.find((g) => g.id === r.filter_resolver_group_id);
     let desc = `When ${r.event_type.replace("incident.", "")}`;
     if (cat) desc += `, category = ${cat.name}`;
     if (sev) desc += `, severity = ${sev.name}`;
-    desc += ` → email ${r.action_email_to}`;
+    if (grp) desc += `, assigned to ${grp.name}`;
+    if (r.action_type === "email") desc += ` → email ${r.action_email_to}`;
+    else desc += ` → ${r.action_type === "slack" ? "Slack" : "Teams"}${grp ? ` (${grp.name}'s channel)` : " (org channel)"}`;
     return desc;
   }
 
   return (
     <Panel title="Automation rules — no account, no sign-up, ever" icon={Zap}>
       <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
-        The recommended way to connect Signal Deck to how you already work. Entirely built in — no Zapier, no developer, nothing to sign up for.
+        The recommended way to connect Signal Deck to how you already work. One trigger, one action, one target — deliberately simple, not a watcher list everyone gets added to.
       </p>
       <div className="space-y-2 mb-4">
         {rules.map((r) => (
@@ -1405,7 +1492,7 @@ function AutomationRulesPanel({ org, lookups, showToast }) {
         {rules.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No automation rules yet.</p>}
       </div>
 
-      <Field label="Rule name"><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Email me on Critical incidents" className="sd-in5" /></Field>
+      <Field label="Rule name"><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Alert Network team on Critical incidents" className="sd-in5" /></Field>
       <Field label="When">
         <select value={eventType} onChange={(e) => setEventType(e.target.value)} className="sd-in5">
           <option value="incident.created">An incident is created</option>
@@ -1427,8 +1514,77 @@ function AutomationRulesPanel({ org, lookups, showToast }) {
           </select>
         </Field>
       </div>
-      <Field label="Send email to"><input value={emailTo} onChange={(e) => setEmailTo(e.target.value)} placeholder="you@yourcompany.co.za" className="sd-in5" /></Field>
+      <Field label="Only assigned to this team (optional)">
+        <select value={resolverGroupId} onChange={(e) => setResolverGroupId(e.target.value)} className="sd-in5">
+          <option value="">Any team</option>
+          {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Then">
+        <select value={actionType} onChange={(e) => setActionType(e.target.value)} className="sd-in5">
+          <option value="email">Send an email</option>
+          <option value="slack">Post to Slack</option>
+          <option value="teams">Post to Teams</option>
+        </select>
+      </Field>
+      {actionType === "email" ? (
+        <Field label="Send email to"><input value={emailTo} onChange={(e) => setEmailTo(e.target.value)} placeholder="you@yourcompany.co.za" className="sd-in5" /></Field>
+      ) : (
+        <p className="text-[11px] mb-3" style={{ color: COLORS.faint }}>
+          Posts to the team's own {actionType === "slack" ? "Slack" : "Teams"} webhook if you picked a team above and it has one configured (Settings → Resolver Groups); otherwise falls back to the organisation-wide webhook.
+        </p>
+      )}
       <button onClick={createRule} className="sd-btn-p6">Create rule</button>
+    </Panel>
+  );
+}
+
+function TeamAssignmentPanel({ org, lookups, showToast }) {
+  const [members, setMembers] = useState([]);
+
+  const load = useCallback(async () => {
+    const { data, error } = await supabase.rpc("list_org_members");
+    if (!error) setMembers(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function assign(userId, groupId) {
+    const { error } = await supabase.rpc("set_member_resolver_group", { target_user_id: userId, target_group_id: groupId || null });
+    if (error) { showToast(error.message); return; }
+    showToast("Team updated");
+    await load();
+  }
+
+  async function setWhatsapp(userId, number) {
+    const { error } = await supabase.rpc("set_member_whatsapp_number", { target_user_id: userId, number: number || null });
+    if (error) { showToast(error.message); return; }
+    await load();
+  }
+
+  return (
+    <Panel title="Team assignment" icon={Users}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Which resolver group each person is on, and their WhatsApp number for escalation (optional — only needed if a WhatsApp escalation policy is used, and each per-message send has a small real cost, disclosed where policies are configured).
+      </p>
+      <div className="space-y-2">
+        {members.map((m) => (
+          <div key={m.user_id} className="text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <div className="min-w-0">
+                <div className="truncate" style={{ color: COLORS.text }}>{m.email}</div>
+                <div className="text-[11px]" style={{ color: COLORS.faint }}>{m.role}</div>
+              </div>
+              <select value={m.resolver_group_id || ""} onChange={(e) => assign(m.user_id, e.target.value)} className="sd-in5" style={{ width: 140 }}>
+                <option value="">No team</option>
+                {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+            </div>
+            <input defaultValue={m.whatsapp_number || ""} onBlur={(e) => setWhatsapp(m.user_id, e.target.value)}
+              placeholder="WhatsApp number, e.g. +27821234567" className="sd-in5 w-full" />
+          </div>
+        ))}
+        {members.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No team members found.</p>}
+      </div>
     </Panel>
   );
 }
@@ -1643,6 +1799,7 @@ function computeChartData(chart, incidents) {
   }
   if (chart.filter_category_id) data = data.filter((i) => i.category?.id === chart.filter_category_id);
   if (chart.filter_severity_id) data = data.filter((i) => i.severity?.id === chart.filter_severity_id);
+  if (chart.filter_resolver_group_id) data = data.filter((i) => (i.incident_assignments || []).some((a) => a.resolver_group_id === chart.filter_resolver_group_id));
 
   const groups = {};
   data.forEach((i) => {
@@ -1733,11 +1890,13 @@ function ChartBuilderForm({ org, lookups, incidents, onSaved, onCancel, editingC
   const [filterRange, setFilterRange] = useState(editingChart?.filter_range_days || "");
   const [filterCategoryId, setFilterCategoryId] = useState(editingChart?.filter_category_id || "");
   const [filterSeverityId, setFilterSeverityId] = useState(editingChart?.filter_severity_id || "");
+  const [filterResolverGroupId, setFilterResolverGroupId] = useState(editingChart?.filter_resolver_group_id || "");
 
   const previewChart = {
     chart_type: chartType, metric, group_by: groupBy,
     filter_status: filterStatus || null, filter_range_days: filterRange ? +filterRange : null,
     filter_category_id: filterCategoryId || null, filter_severity_id: filterSeverityId || null,
+    filter_resolver_group_id: filterResolverGroupId || null,
   };
 
   async function save() {
@@ -1746,6 +1905,7 @@ function ChartBuilderForm({ org, lookups, incidents, onSaved, onCancel, editingC
       org_id: org.id, name, chart_type: chartType, metric, group_by: groupBy,
       filter_status: filterStatus || null, filter_range_days: filterRange ? +filterRange : null,
       filter_category_id: filterCategoryId || null, filter_severity_id: filterSeverityId || null,
+      filter_resolver_group_id: filterResolverGroupId || null,
     };
     if (editingChart) {
       await supabase.from("custom_charts").update(payload).eq("id", editingChart.id);
@@ -1801,6 +1961,12 @@ function ChartBuilderForm({ org, lookups, incidents, onSaved, onCancel, editingC
           </select>
         </Field>
       </div>
+      <Field label="Team filter (optional)">
+        <select value={filterResolverGroupId} onChange={(e) => setFilterResolverGroupId(e.target.value)} className="sd-in5">
+          <option value="">Any team</option>
+          {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+      </Field>
 
       <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Live preview</p>
       <div className="mb-3 rounded-lg p-2" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
@@ -1976,5 +2142,312 @@ function CustomDashboards({ org, lookups, incidents, showToast }) {
         )}
       </Panel>
     </div>
+  );
+}
+
+/* ================================= ON-CALL PANEL =============================== */
+// The free alternative to PagerDuty: who's on call for each team, and one
+// escalation tier if nobody acknowledges in time. Explicit date ranges
+// instead of a recurrence engine — kept understandable at a glance.
+function OnCallPanel({ org, lookups, showToast }) {
+  const [members, setMembers] = useState([]);
+  const [rotations, setRotations] = useState([]);
+  const [policies, setPolicies] = useState([]);
+
+  const [rotGroupId, setRotGroupId] = useState("");
+  const [rotUserId, setRotUserId] = useState("");
+  const [rotStart, setRotStart] = useState("");
+  const [rotEnd, setRotEnd] = useState("");
+
+  const [polGroupId, setPolGroupId] = useState("");
+  const [polSeverityId, setPolSeverityId] = useState("");
+  const [polMinutes, setPolMinutes] = useState(15);
+  const [polEscalateGroupId, setPolEscalateGroupId] = useState("");
+  const [polEscalateEmail, setPolEscalateEmail] = useState("");
+  const [polChannel, setPolChannel] = useState("email");
+  const [polEscalateWhatsapp, setPolEscalateWhatsapp] = useState("");
+
+  const load = useCallback(async () => {
+    const [m, r, p] = await Promise.all([
+      supabase.rpc("list_org_members"),
+      supabase.from("on_call_rotations").select("*, resolver_groups(name)").order("starts_at", { ascending: false }),
+      supabase.from("escalation_policies").select("*, resolver_groups!escalation_policies_resolver_group_id_fkey(name), severities(name)").order("created_at", { ascending: false }),
+    ]);
+    setMembers(m.data || []);
+    setRotations(r.data || []);
+    setPolicies(p.data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function addRotation() {
+    if (!rotGroupId || !rotUserId || !rotStart || !rotEnd) { showToast("Fill in team, person, and both dates"); return; }
+    const { error } = await supabase.from("on_call_rotations").insert({
+      org_id: org.id, resolver_group_id: rotGroupId, user_id: rotUserId,
+      starts_at: new Date(rotStart).toISOString(), ends_at: new Date(rotEnd).toISOString(),
+    });
+    if (error) { showToast(error.message); return; }
+    setRotGroupId(""); setRotUserId(""); setRotStart(""); setRotEnd("");
+    showToast("On-call shift added");
+    await load();
+  }
+  async function deleteRotation(id) {
+    await supabase.from("on_call_rotations").delete().eq("id", id);
+    await load();
+  }
+
+  async function addPolicy() {
+    if (!polGroupId) { showToast("Choose which team this policy watches"); return; }
+    if (!polEscalateGroupId && polChannel === "email" && !polEscalateEmail.trim()) { showToast("Choose an escalation target — a team or an email"); return; }
+    if (!polEscalateGroupId && polChannel === "whatsapp" && !polEscalateWhatsapp.trim()) { showToast("Choose an escalation target — a team or a WhatsApp number"); return; }
+    const { error } = await supabase.from("escalation_policies").insert({
+      org_id: org.id, resolver_group_id: polGroupId, severity_id: polSeverityId || null,
+      minutes_before_escalation: +polMinutes, notify_channel: polChannel,
+      escalate_to_resolver_group_id: polEscalateGroupId || null,
+      escalate_to_email: (!polEscalateGroupId && polChannel === "email") ? polEscalateEmail : null,
+      escalate_to_whatsapp_number: (!polEscalateGroupId && polChannel === "whatsapp") ? polEscalateWhatsapp : null,
+    });
+    if (error) { showToast(error.message); return; }
+    setPolGroupId(""); setPolSeverityId(""); setPolMinutes(15); setPolEscalateGroupId(""); setPolEscalateEmail(""); setPolEscalateWhatsapp("");
+    showToast("Escalation policy created");
+    await load();
+  }
+  async function togglePolicy(p) {
+    await supabase.from("escalation_policies").update({ active: !p.active }).eq("id", p.id);
+    await load();
+  }
+  async function deletePolicy(id) {
+    await supabase.from("escalation_policies").delete().eq("id", id);
+    await load();
+  }
+
+  return (
+    <>
+      <Panel title="On-call schedule" icon={Bell}>
+        <p className="text-sm mb-3" style={{ color: COLORS.muted }}>Who's on call for each team, and when. No recurrence rules to learn — just add shifts as date ranges.</p>
+        <div className="space-y-2 mb-4">
+          {rotations.map((r) => (
+            <div key={r.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <div>
+                <span style={{ color: COLORS.text }}>{r.resolver_groups?.name}</span>
+                <span className="text-xs ml-2" style={{ color: COLORS.faint }}>{new Date(r.starts_at).toLocaleString()} → {new Date(r.ends_at).toLocaleString()}</span>
+              </div>
+              <button onClick={() => deleteRotation(r.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+            </div>
+          ))}
+          {rotations.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No on-call shifts scheduled yet.</p>}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Team">
+            <select value={rotGroupId} onChange={(e) => setRotGroupId(e.target.value)} className="sd-in5">
+              <option value="">Choose…</option>
+              {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Person">
+            <select value={rotUserId} onChange={(e) => setRotUserId(e.target.value)} className="sd-in5">
+              <option value="">Choose…</option>
+              {members.map((m) => <option key={m.user_id} value={m.user_id}>{m.email}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Starts"><input type="datetime-local" value={rotStart} onChange={(e) => setRotStart(e.target.value)} className="sd-in5" /></Field>
+          <Field label="Ends"><input type="datetime-local" value={rotEnd} onChange={(e) => setRotEnd(e.target.value)} className="sd-in5" /></Field>
+        </div>
+        <button onClick={addRotation} className="sd-btn-p6">Add shift</button>
+      </Panel>
+
+      <Panel title="Escalation policies" icon={AlertTriangle}>
+        <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+          If an incident for a team isn't acknowledged in time, escalate once — to another team's on-call person, or a fixed email. Free (email/Slack/Teams), no per-message cost, unlike SMS/voice paging.
+        </p>
+        <div className="space-y-2 mb-4">
+          {policies.map((p) => (
+            <div key={p.id} className="text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <div className="flex items-center justify-between">
+                <span style={{ color: COLORS.text }}>{p.resolver_groups?.name}{p.severities?.name ? ` · ${p.severities.name}` : ""}</span>
+                <div className="flex gap-2">
+                  <button onClick={() => togglePolicy(p)} className="text-xs" style={{ color: p.active ? COLORS.teal : COLORS.faint }}>{p.active ? "Active" : "Paused"}</button>
+                  <button onClick={() => deletePolicy(p.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+                </div>
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
+                Unacknowledged after {p.minutes_before_escalation} min → {p.notify_channel === "whatsapp" ? "WhatsApp" : "Email"} to {p.escalate_to_email || p.escalate_to_whatsapp_number || "on-call for " + (lookups.resolverGroups.find((g) => g.id === p.escalate_to_resolver_group_id)?.name || "—")}
+              </div>
+            </div>
+          ))}
+          {policies.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No escalation policies yet.</p>}
+        </div>
+        <Field label="Watch this team">
+          <select value={polGroupId} onChange={(e) => setPolGroupId(e.target.value)} className="sd-in5">
+            <option value="">Choose…</option>
+            {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Only this severity (optional)">
+            <select value={polSeverityId} onChange={(e) => setPolSeverityId(e.target.value)} className="sd-in5">
+              <option value="">Any severity</option>
+              {lookups.severities.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Minutes before escalating">
+            <input type="number" min="1" value={polMinutes} onChange={(e) => setPolMinutes(e.target.value)} className="sd-in5" />
+          </Field>
+        </div>
+        <Field label="Notify by">
+          <select value={polChannel} onChange={(e) => setPolChannel(e.target.value)} className="sd-in5">
+            <option value="email">Email (free)</option>
+            <option value="whatsapp">WhatsApp (small real cost per message — see below)</option>
+          </select>
+        </Field>
+        {polChannel === "whatsapp" && (
+          <div className="text-[11px] mb-3 p-2 rounded-lg" style={{ background: COLORS.amber + "18", border: `1px solid ${COLORS.amber}44`, color: COLORS.amber }}>
+            Each WhatsApp escalation costs a small real amount charged to your Meta account — this isn't free the way email is. Requires WhatsApp set up in Settings (see setup guide) and each person's WhatsApp number saved under Team assignment.
+          </div>
+        )}
+        <Field label="Escalate to this team's on-call (or set a fixed target below)">
+          <select value={polEscalateGroupId} onChange={(e) => setPolEscalateGroupId(e.target.value)} className="sd-in5">
+            <option value="">— use a fixed target below —</option>
+            {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </Field>
+        {!polEscalateGroupId && polChannel === "email" && (
+          <Field label="Escalate to this email"><input value={polEscalateEmail} onChange={(e) => setPolEscalateEmail(e.target.value)} placeholder="manager@yourcompany.co.za" className="sd-in5" /></Field>
+        )}
+        {!polEscalateGroupId && polChannel === "whatsapp" && (
+          <Field label="Escalate to this WhatsApp number"><input value={polEscalateWhatsapp} onChange={(e) => setPolEscalateWhatsapp(e.target.value)} placeholder="+27821234567" className="sd-in5" /></Field>
+        )}
+        <button onClick={addPolicy} className="sd-btn-p6">Create escalation policy</button>
+      </Panel>
+    </>
+  );
+}
+
+/* ============================== CUSTOM FIELD INPUT ============================ */
+// Shared rendering for a custom field, used both at incident creation and in
+// the incident detail view — one place that knows how to render each type.
+function CustomFieldInput({ field, value, onChange }) {
+  return (
+    <Field label={field.label + (field.required ? " *" : "")}>
+      {field.field_type === "text" && <input value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" />}
+      {field.field_type === "number" && <input type="number" value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" />}
+      {field.field_type === "date" && <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" />}
+      {field.field_type === "checkbox" && (
+        <input type="checkbox" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} />
+      )}
+      {field.field_type === "select" && (
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="sd-in">
+          <option value="">Choose…</option>
+          {(field.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+      )}
+    </Field>
+  );
+}
+
+/* ============================== CUSTOM FIELDS PANEL (Settings) ============================ */
+function CustomFieldsPanel({ org, lookups, onLookupsChanged, showToast }) {
+  const [label, setLabel] = useState("");
+  const [fieldType, setFieldType] = useState("text");
+  const [optionsText, setOptionsText] = useState("");
+  const [required, setRequired] = useState(false);
+
+  async function addField() {
+    if (!label.trim()) { showToast("Give the field a name"); return; }
+    const options = fieldType === "select" ? optionsText.split(",").map((s) => s.trim()).filter(Boolean) : null;
+    const { error } = await supabase.from("custom_fields").insert({
+      org_id: org.id, label, field_type: fieldType, options, required,
+      sort_order: (lookups.customFields || []).length,
+    });
+    if (error) { showToast(error.message); return; }
+    setLabel(""); setFieldType("text"); setOptionsText(""); setRequired(false);
+    showToast("Custom field added");
+    await onLookupsChanged();
+  }
+  async function deleteField(id) {
+    await supabase.from("custom_fields").delete().eq("id", id);
+    await onLookupsChanged();
+  }
+
+  return (
+    <Panel title="Custom fields" icon={ScanEye}>
+      <p className="text-sm mb-2" style={{ color: COLORS.muted }}>
+        Add your own fields to incidents — asset tag, cost centre, client reference, whatever your business needs. No code, no developer.
+      </p>
+      <div className="text-[11px] mb-3 p-2 rounded-lg" style={{ background: COLORS.red + "18", border: `1px solid ${COLORS.red}44`, color: COLORS.red }}>
+        Don't use custom fields to store names, phone numbers, ID numbers, or other personal information — they're visible the same way every other incident field is. Turn on the Identity Module (Privacy tab) for that instead, which has proper consent tracking. Text entered here is automatically screened for common personal-identifier patterns, but that's a safety net, not a substitute for using the right field for the job.
+      </div>
+      <div className="space-y-2 mb-4">
+        {(lookups.customFields || []).map((f) => (
+          <div key={f.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <div>
+              <span style={{ color: COLORS.text }}>{f.label}</span>
+              <span className="text-[11px] ml-2" style={{ color: COLORS.faint }}>{f.field_type}{f.required ? " · required" : ""}</span>
+            </div>
+            <button onClick={() => deleteField(f.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+          </div>
+        ))}
+        {(lookups.customFields || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No custom fields yet.</p>}
+      </div>
+      <Field label="Field name"><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Asset Tag" className="sd-in5" /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Type">
+          <select value={fieldType} onChange={(e) => setFieldType(e.target.value)} className="sd-in5">
+            <option value="text">Text</option>
+            <option value="number">Number</option>
+            <option value="date">Date</option>
+            <option value="select">Dropdown</option>
+            <option value="checkbox">Checkbox</option>
+          </select>
+        </Field>
+        <Field label="Required?">
+          <select value={required ? "yes" : "no"} onChange={(e) => setRequired(e.target.value === "yes")} className="sd-in5">
+            <option value="no">Optional</option>
+            <option value="yes">Required</option>
+          </select>
+        </Field>
+      </div>
+      {fieldType === "select" && (
+        <Field label="Options (comma-separated)"><input value={optionsText} onChange={(e) => setOptionsText(e.target.value)} placeholder="Option A, Option B, Option C" className="sd-in5" /></Field>
+      )}
+      <button onClick={addField} className="sd-btn-p6">Add field</button>
+    </Panel>
+  );
+}
+
+/* ======================= CUSTOM FIELDS VALUES PANEL (incident detail) ======================= */
+function CustomFieldsValuesPanel({ incident, lookups, org, onChanged }) {
+  const fields = lookups.customFields || [];
+  const existingValues = incident.incident_custom_values || [];
+  const [edits, setEdits] = useState({});
+
+  if (fields.length === 0) return null;
+
+  function valueFor(fieldId) {
+    if (fieldId in edits) return edits[fieldId];
+    return existingValues.find((v) => v.custom_field_id === fieldId)?.value ?? "";
+  }
+
+  async function save(fieldId) {
+    const raw = edits[fieldId];
+    if (raw === undefined) return;
+    const value = redactPII(String(raw));
+    await supabase.from("incident_custom_values").upsert(
+      { incident_id: incident.id, custom_field_id: fieldId, org_id: org.id, value },
+      { onConflict: "incident_id,custom_field_id" }
+    );
+    onChanged();
+  }
+
+  return (
+    <Panel title="Custom fields" icon={ScanEye}>
+      {fields.map((f) => (
+        <div key={f.id} className="mb-1">
+          <CustomFieldInput field={f} value={valueFor(f.id)} onChange={(v) => setEdits((prev) => ({ ...prev, [f.id]: v }))} />
+          <button onClick={() => save(f.id)} className="text-[11px] mb-2" style={{ color: COLORS.amber }}>Save</button>
+        </div>
+      ))}
+    </Panel>
   );
 }
