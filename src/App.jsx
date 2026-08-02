@@ -33,7 +33,7 @@ function fmtDuration(ms) {
 }
 
 /* =============================== ROOT APP ================================= */
-export default function App() {
+export default function App({ inviteCode }) {
   const [session, setSession] = useState(undefined); // undefined = loading, null = logged out
   const [org, setOrg] = useState(null); // { id, name, language, retention_days, identity_module_enabled, ... }
   const [checkingOrg, setCheckingOrg] = useState(true);
@@ -64,8 +64,12 @@ export default function App() {
   if (session === undefined || (session && checkingOrg)) {
     return <Centered><Anchor className="animate-spin" size={28} color={COLORS.amber} /></Centered>;
   }
-  if (!session) return <AuthScreen />;
-  if (!org) return <OnboardingScreen onCreated={loadOrg} />;
+  if (!session) return <AuthScreen inviteCode={inviteCode} />;
+  if (!org) {
+    return inviteCode
+      ? <JoinScreen inviteCode={inviteCode} onJoined={loadOrg} />
+      : <OnboardingScreen onCreated={loadOrg} />;
+  }
   return <MainApp org={org} onOrgUpdated={setOrg} />;
 }
 
@@ -78,13 +82,22 @@ function Centered({ children }) {
 }
 
 /* ============================== AUTH SCREEN ================================ */
-function AuthScreen() {
-  const [mode, setMode] = useState("signin");
+function AuthScreen({ inviteCode }) {
+  const [mode, setMode] = useState(inviteCode ? "signup" : "signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent] = useState(false);
+  const [invitePreview, setInvitePreview] = useState(null);
+
+  useEffect(() => {
+    if (!inviteCode) return;
+    supabase.rpc("preview_invite", { invite_code: inviteCode }).then(({ data }) => {
+      const row = Array.isArray(data) ? data[0] : data;
+      setInvitePreview(row || { valid: false });
+    });
+  }, [inviteCode]);
 
   async function submit() {
     setError(""); setLoading(true);
@@ -106,6 +119,11 @@ function AuthScreen() {
           <Anchor size={20} color={COLORS.amber} />
           <span className="sd-display text-lg font-semibold" style={{ color: COLORS.text }}>Signal Deck</span>
         </div>
+        {inviteCode && invitePreview && (
+          <div className="mb-4 p-2.5 rounded-lg text-xs" style={{ background: invitePreview.valid ? COLORS.teal + "18" : COLORS.red + "18", border: `1px solid ${invitePreview.valid ? COLORS.teal : COLORS.red}44`, color: invitePreview.valid ? COLORS.teal : COLORS.red }}>
+            {invitePreview.valid ? `You're joining ${invitePreview.org_name} as ${invitePreview.role}. Sign up below to accept.` : "This invite link is invalid or has expired."}
+          </div>
+        )}
         {sent ? (
           <p className="text-sm" style={{ color: COLORS.muted }}>Check your email to confirm your account, then come back and sign in.</p>
         ) : (
@@ -159,6 +177,52 @@ function OnboardingScreen({ onCreated }) {
           {loading ? "Setting up…" : "Create workspace"}
         </button>
         <style>{`.sd-in { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 9px 11px; font-size: 13px; color: ${COLORS.text}; }`}</style>
+      </div>
+    </Centered>
+  );
+}
+
+/* ============================== JOIN SCREEN (via invite) =================== */
+// This is what actually closes the gap: a signed-up person with no org yet,
+// arriving via an invite link, joins the org that invited them instead of
+// accidentally creating a brand new one of their own.
+function JoinScreen({ inviteCode, onJoined }) {
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    supabase.rpc("preview_invite", { invite_code: inviteCode }).then(({ data }) => {
+      const row = Array.isArray(data) ? data[0] : data;
+      setPreview(row || { valid: false });
+    });
+  }, [inviteCode]);
+
+  async function join() {
+    setLoading(true); setError("");
+    const { error } = await supabase.rpc("join_via_invite", { invite_code: inviteCode });
+    if (error) { setError(error.message); setLoading(false); return; }
+    await onJoined();
+  }
+
+  return (
+    <Centered>
+      <div className="w-full max-w-sm p-6 rounded-xl text-center" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+        <Anchor size={20} color={COLORS.amber} className="mx-auto mb-3" />
+        {!preview ? (
+          <p className="text-sm" style={{ color: COLORS.muted }}>Checking invite…</p>
+        ) : !preview.valid ? (
+          <p className="text-sm" style={{ color: COLORS.red }}>This invite link is invalid or has expired. Ask whoever sent it for a new one.</p>
+        ) : (
+          <>
+            <h1 className="sd-display text-lg font-semibold mb-2" style={{ color: COLORS.text }}>Join {preview.org_name}</h1>
+            <p className="text-sm mb-4" style={{ color: COLORS.muted }}>You'll join as {preview.role}.</p>
+            {error && <p className="text-xs mb-3" style={{ color: COLORS.red }}>{error}</p>}
+            <button onClick={join} disabled={loading} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{ background: COLORS.amber, color: "#1A1200" }}>
+              {loading ? "Joining…" : "Join"}
+            </button>
+          </>
+        )}
       </div>
     </Centered>
   );
@@ -1149,6 +1213,8 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
         ))}
         <p className="text-[11px] mt-1" style={{ color: COLORS.faint }}>Business weight doesn't change the SLA clock — it's used to sort the dashboard by revenue risk, not just severity label.</p>
       </Panel>
+
+      <InvitePanel org={org} lookups={lookups} showToast={showToast} />
 
       <TeamAssignmentPanel org={org} lookups={lookups} showToast={showToast} />
 
@@ -2448,6 +2514,89 @@ function CustomFieldsValuesPanel({ incident, lookups, org, onChanged }) {
           <button onClick={() => save(f.id)} className="text-[11px] mb-2" style={{ color: COLORS.amber }}>Save</button>
         </div>
       ))}
+    </Panel>
+  );
+}
+
+/* ================================= INVITE PANEL =============================== */
+// Generates the link that closes the gap found during tonight's testing —
+// without this, a new sign-up always creates their own organisation, never
+// joins yours.
+function InvitePanel({ org, lookups, showToast }) {
+  const [invites, setInvites] = useState([]);
+  const [role, setRole] = useState("agent");
+  const [groupId, setGroupId] = useState("");
+  const [lastLink, setLastLink] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("org_invites").select("*, resolver_groups(name)").order("created_at", { ascending: false });
+    setInvites(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function createInvite() {
+    const { data, error } = await supabase.rpc("create_invite", { invite_role: role, target_group_id: groupId || null });
+    if (error) { showToast(error.message); return; }
+    const row = Array.isArray(data) ? data[0] : data;
+    setLastLink(`${window.location.origin}/join/${row.code}`);
+    await load();
+  }
+  async function revoke(id) {
+    await supabase.rpc("revoke_invite", { target_invite_id: id });
+    showToast("Invite revoked");
+    await load();
+  }
+  function copyLink() {
+    navigator.clipboard?.writeText(lastLink);
+    setCopied(true); setTimeout(() => setCopied(false), 1800);
+  }
+
+  return (
+    <Panel title="Invite a team member" icon={Users}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        A sign-up always creates its own new organisation unless it comes through a link like this — this is how a second person actually joins yours.
+      </p>
+      {lastLink && (
+        <div className="mb-4 p-2.5 rounded-lg" style={{ background: COLORS.teal + "18", border: `1px solid ${COLORS.teal}44` }}>
+          <div className="flex items-center gap-2">
+            <input readOnly value={lastLink} className="sd-in5 flex-1 sd-mono" style={{ fontSize: 11 }} />
+            <button onClick={copyLink} className="sd-btn-p6 flex items-center gap-1">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
+          </div>
+          <p className="text-[11px] mt-1.5" style={{ color: COLORS.teal }}>Send this to the person you're inviting. Works once, expires in 14 days.</p>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Role">
+          <select value={role} onChange={(e) => setRole(e.target.value)} className="sd-in5">
+            <option value="agent">Agent</option>
+            <option value="admin">Admin</option>
+            <option value="owner">Owner</option>
+          </select>
+        </Field>
+        <Field label="Starting team (optional)">
+          <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="sd-in5">
+            <option value="">No team yet</option>
+            {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <button onClick={createInvite} className="sd-btn-p6 mb-4">Generate invite link</button>
+
+      <div className="space-y-2">
+        {invites.map((i) => {
+          const expired = !i.used_at && new Date(i.expires_at) < new Date();
+          return (
+            <div key={i.id} className="flex items-center justify-between text-xs p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span style={{ color: COLORS.muted }}>
+                {i.role}{i.resolver_groups?.name ? ` · ${i.resolver_groups.name}` : ""} · {i.used_at ? "used" : expired ? "expired" : "pending"}
+              </span>
+              {!i.used_at && !expired && <button onClick={() => revoke(i.id)} className="text-[11px]" style={{ color: COLORS.red }}>Revoke</button>}
+            </div>
+          );
+        })}
+        {invites.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No invites yet.</p>}
+      </div>
     </Panel>
   );
 }
