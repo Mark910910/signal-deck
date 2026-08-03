@@ -970,7 +970,7 @@ function IncidentForm({ lookups, org, onCreated }) {
           {hasContact && (
             <label className="flex items-start gap-2 text-[11px] p-2.5 rounded-lg mb-2" style={{ background: COLORS.surfaceHi, border: `1px solid ${warn && !consent ? COLORS.red : COLORS.border}` }}>
               <input type="checkbox" checked={consent} onChange={(e) => { setConsent(e.target.checked); setWarn(false); }} className="mt-0.5" />
-              <span>I have this person's consent to store their name and contact details for resolving this incident.</span>
+              <span>I have this person's consent to store their name and contact details for resolving this incident, and to send them automatic email updates on this incident's progress if they gave an email address.</span>
             </label>
           )}
         </>
@@ -1345,7 +1345,9 @@ function PrivacyCenter({ org, onOrgUpdated, incidents, showToast }) {
     <div>
       <Panel title="Identity Module" icon={ShieldCheck}>
         <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
-          {org.identity_module_enabled ? "On — incidents can capture customer name and contact details, with consent." : "Off — incidents are metadata-only. No names, emails, or phone numbers are stored anywhere."}
+          {org.identity_module_enabled
+            ? "On — incidents can capture customer name and contact details, with consent. When a customer gives an email and consents, they'll also get automatic email updates when their incident's status changes, gets a reply, or is resolved."
+            : "Off — incidents are metadata-only. No names, emails, or phone numbers are stored anywhere, and no automatic emails are ever sent to customers."}
         </p>
         <button onClick={() => toggleIdentityModule(!org.identity_module_enabled)} className="sd-btn-p">
           {org.identity_module_enabled ? "Turn off Identity Module" : "Turn on Identity Module"}
