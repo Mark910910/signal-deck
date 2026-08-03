@@ -13,19 +13,26 @@ const COLORS = {
 export default function TrackPage({ token }) {
   const [status, setStatus] = useState(null); // undefined-safe: null = loading/error
   const [comments, setComments] = useState([]);
+  const [attachments, setAttachments] = useState([]);
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const [error, setError] = useState("");
 
+  const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // Same 10MB cap as the staff side — one consistent limit everywhere
+
   const load = useCallback(async () => {
-    const [s, c] = await Promise.all([
+    const [s, c, a] = await Promise.all([
       supabase.rpc("get_incident_status_for_customer", { track_token: token }),
       supabase.rpc("list_customer_visible_comments", { track_token: token }),
+      supabase.rpc("list_customer_attachments", { track_token: token }),
     ]);
     const row = Array.isArray(s.data) ? s.data[0] : s.data;
     if (!row) { setError("This link doesn't look right — please check it with whoever gave it to you."); return; }
     setStatus(row);
     setComments(c.data || []);
+    setAttachments(a.data || []);
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
@@ -38,6 +45,29 @@ export default function TrackPage({ token }) {
     if (error) { setError("Couldn't send that — please try again."); return; }
     setReply("");
     await load();
+  }
+
+  async function handleUpload(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploadError("");
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      setUploadError("That file is larger than 10MB — please attach a smaller file.");
+      return;
+    }
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = reader.result.split(",")[1];
+      const { data, error } = await supabase.functions.invoke("upload-customer-attachment", {
+        body: { track_token: token, file_name: file.name, file_base64: base64 },
+      });
+      setUploading(false);
+      if (error || data?.error) { setUploadError(data?.error || "Upload failed — please try again."); return; }
+      await load();
+    };
+    reader.readAsDataURL(file);
   }
 
   return (
@@ -68,6 +98,19 @@ export default function TrackPage({ token }) {
                 </div>
               ))}
               {comments.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No messages yet.</p>}
+            </div>
+
+            <div className="mb-4">
+              <div className="text-xs mb-1.5" style={{ color: COLORS.faint }}>Attachments</div>
+              {attachments.map((a, i) => (
+                <div key={i} className="text-xs px-2 py-1.5 rounded-lg mb-1" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.muted }}>{a.file_name}</div>
+              ))}
+              {attachments.length === 0 && <p className="text-xs mb-1.5" style={{ color: COLORS.faint }}>None yet.</p>}
+              {uploadError && <p className="text-xs mb-1.5" style={{ color: COLORS.red }}>{uploadError}</p>}
+              <label className="text-xs underline cursor-pointer" style={{ color: COLORS.amber }}>
+                {uploading ? "Uploading…" : "Attach a photo or file (up to 10MB)"}
+                <input type="file" onChange={handleUpload} disabled={uploading} className="hidden" />
+              </label>
             </div>
 
             <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder="Add a message — avoid sharing ID numbers or banking details"
