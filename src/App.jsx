@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   AlertTriangle, Clock, CheckCircle2, Radio, Search, Settings as SettingsIcon,
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
-  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell
+  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 import { supabase } from "./supabaseClient.js";
@@ -46,10 +46,10 @@ export default function App({ inviteCode }) {
 
   const loadOrg = useCallback(async () => {
     setCheckingOrg(true);
-    const { data: member } = await supabase.from("org_members").select("org_id, role, resolver_group_id").maybeSingle();
+    const { data: member } = await supabase.from("org_members").select("org_id, role, resolver_group_id, user_id").maybeSingle();
     if (member) {
       const { data: orgRow } = await supabase.from("organisations").select("*").eq("id", member.org_id).maybeSingle();
-      setOrg(orgRow ? { ...orgRow, myRole: member.role, myResolverGroupId: member.resolver_group_id } : null);
+      setOrg(orgRow ? { ...orgRow, myRole: member.role, myResolverGroupId: member.resolver_group_id, myUserId: member.user_id } : null);
     } else {
       setOrg(null);
     }
@@ -233,6 +233,8 @@ const NAV = [
   { key: "deck", label: "Deck", icon: Radio },
   { key: "incidents", label: "Incidents", icon: AlertTriangle },
   { key: "new", label: "Log Incident", icon: Plus },
+  { key: "problems", label: "Problems", icon: Layers },
+  { key: "assets", label: "Assets", icon: Server },
   { key: "preventatives", label: "Preventatives", icon: ShieldCheck },
   { key: "dashboards", label: "Dashboards", icon: BarChart3 },
   { key: "diagnostics", label: "Diagnostics", icon: Activity },
@@ -251,17 +253,19 @@ function MainApp({ org, onOrgUpdated }) {
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
 
   const loadLookups = useCallback(async () => {
-    const [rg, cat, st, sv, rca, cf] = await Promise.all([
+    const [rg, cat, st, sv, rca, cf, sc, cit] = await Promise.all([
       supabase.from("resolver_groups").select("*").order("name"),
       supabase.from("categories").select("*").order("name"),
       supabase.from("statuses").select("*").order("sort_order"),
       supabase.from("severities").select("*"),
       supabase.from("rca_categories").select("*").order("sort_order"),
       supabase.from("custom_fields").select("*").order("sort_order"),
+      supabase.from("service_catalog_items").select("*").eq("active", true).order("name"),
+      supabase.from("ci_types").select("*").order("sort_order"),
     ]);
     setLookups({
       resolverGroups: rg.data || [], categories: cat.data || [], statuses: st.data || [],
-      severities: sv.data || [], rcaCategories: rca.data || [], customFields: cf.data || [],
+      severities: sv.data || [], rcaCategories: rca.data || [], customFields: cf.data || [], catalogItems: sc.data || [], ciTypes: cit.data || [],
     });
   }, []);
 
@@ -269,7 +273,8 @@ function MainApp({ org, onOrgUpdated }) {
     const { data, error } = await supabase
       .from("incidents")
       .select(`*, category:categories(id,name), severity:severities(id,name,sla_minutes,business_weight), status:statuses(id,name), rca_category:rca_categories(id,name),
-                incident_assignments(*, resolver_groups(name, channel_slack_webhook, channel_teams_webhook)), incident_timeline(*), escalations(*), incident_identity(*), incident_custom_values(*)`)
+                incident_assignments(*, resolver_groups(name, channel_slack_webhook, channel_teams_webhook)), incident_timeline(*), escalations(*), incident_identity(*), incident_custom_values(*),
+                problem_incidents(problem_id, problems(display_id, title, status, workaround))`)
       .order("created_at", { ascending: false });
     if (!error) setIncidents(data || []);
   }, []);
@@ -318,7 +323,7 @@ function MainApp({ org, onOrgUpdated }) {
           {tab === "deck" && <Deck incidents={incidents} lookups={lookups} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }} />}
           {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} onSelect={setSelectedId} />}
           {tab === "incidents" && selected && (
-            <IncidentDetail incident={selected} lookups={lookups} org={org} tick={tick}
+            <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick}
               onBack={() => setSelectedId(null)} onChanged={loadIncidents} showToast={showToast} />
           )}
           {tab === "new" && (
@@ -326,6 +331,8 @@ function MainApp({ org, onOrgUpdated }) {
               onCreated={async () => { await loadIncidents(); setTab("incidents"); showToast("Incident logged"); }} />
           )}
           {tab === "diagnostics" && <Diagnostics org={org} lookups={lookups} />}
+          {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
+          {tab === "assets" && <AssetsView org={org} lookups={lookups} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
           {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
           {tab === "dashboards" && <CustomDashboards org={org} lookups={lookups} incidents={incidents} showToast={showToast} />}
           {tab === "privacy" && <PrivacyCenter org={org} onOrgUpdated={onOrgUpdated} incidents={incidents} showToast={showToast} />}
@@ -459,6 +466,63 @@ function StatCard({ icon: Icon, label, value, color }) {
 }
 
 /* =============================== INCIDENT LIST ============================== */
+// Field definitions for the condition builder — merges built-in incident
+// fields with whatever custom fields this organisation has configured, so
+// "include custom fields in queries" isn't a separate mode, it's just more
+// entries in the same one list.
+function buildFieldDefs(lookups) {
+  const builtIn = [
+    { key: "category", label: "Category", type: "select", options: lookups.categories.map((c) => c.name), get: (i) => i.category?.name },
+    { key: "severity", label: "Severity", type: "select", options: lookups.severities.map((s) => s.name), get: (i) => i.severity?.name },
+    { key: "status", label: "Status", type: "select", options: lookups.statuses.map((s) => s.name), get: (i) => i.status?.name },
+    { key: "rca_category", label: "Root cause", type: "select", options: lookups.rcaCategories.map((r) => r.name), get: (i) => i.rca_category?.name },
+    { key: "resolver_group", label: "Team", type: "select", options: lookups.resolverGroups.map((g) => g.name), get: (i) => (i.incident_assignments || []).map((a) => a.resolver_groups?.name).join(", ") },
+    { key: "source", label: "Source", type: "select", options: ["agent", "chatbot", "portal", "api"], get: (i) => i.source },
+    { key: "resolution_class", label: "Resolution", type: "select", options: ["Permanent Fix", "Temporary Fix", "Workaround", "Escalated (No Fix)"], get: (i) => i.resolution_class },
+    { key: "record_type", label: "Type", type: "select", options: ["incident", "service_request"], get: (i) => i.record_type },
+    { key: "approval_status", label: "Approval status", type: "select", options: ["not_required", "pending", "approved", "rejected"], get: (i) => i.approval_status },
+    { key: "created_at", label: "Created", type: "date", get: (i) => i.created_at },
+  ];
+  const custom = (lookups.customFields || []).map((f) => ({
+    key: `custom:${f.id}`, label: f.label, type: f.field_type === "select" ? "select" : f.field_type === "checkbox" ? "checkbox" : f.field_type,
+    options: f.options || [],
+    get: (i) => (i.incident_custom_values || []).find((v) => v.custom_field_id === f.id)?.value,
+  }));
+  return [...builtIn, ...custom];
+}
+
+function evaluateCondition(incident, condition, fieldDefs) {
+  const def = fieldDefs.find((f) => f.key === condition.field);
+  if (!def) return true;
+  const actual = def.get(incident);
+
+  if (def.type === "date") {
+    if (!actual) return false;
+    const days = { "7": 7, "30": 30, "90": 90 }[condition.value];
+    if (condition.operator === "last_n_days") return new Date(actual).getTime() >= Date.now() - days * 86400000;
+    return true;
+  }
+  if (def.type === "checkbox") {
+    const isChecked = actual === "true";
+    return condition.operator === "checked" ? isChecked : !isChecked;
+  }
+  if (def.type === "number") {
+    const n = parseFloat(actual);
+    const v = parseFloat(condition.value);
+    if (isNaN(n)) return false;
+    if (condition.operator === "eq") return n === v;
+    if (condition.operator === "gt") return n > v;
+    if (condition.operator === "lt") return n < v;
+  }
+  // text / select
+  if (condition.operator === "is_empty") return !actual;
+  if (!actual) return false;
+  if (condition.operator === "is") return actual === condition.value;
+  if (condition.operator === "is_not") return actual !== condition.value;
+  if (condition.operator === "contains") return actual.toLowerCase().includes((condition.value || "").toLowerCase());
+  return true;
+}
+
 function IncidentList({ incidents, lookups, org, tick, onSelect }) {
   const [filter, setFilter] = useState("open");
   const [query, setQuery] = useState("");
@@ -469,6 +533,19 @@ function IncidentList({ incidents, lookups, org, tick, onSelect }) {
   // hard to see who's working on what" without recreating Jira/ServiceNow's
   // notification sprawl where everyone gets CC'd on everything regardless.
   const [scope, setScope] = useState(org?.myResolverGroupId ? "mine" : "all");
+  const [quickFilter, setQuickFilter] = useState(null); // 'mine' | 'unassigned' | 'overdue' | null
+  const [conditions, setConditions] = useState([]);
+  const [showBuilder, setShowBuilder] = useState(false);
+  const [savedViews, setSavedViews] = useState([]);
+  const [viewName, setViewName] = useState("");
+
+  const fieldDefs = useMemo(() => buildFieldDefs(lookups), [lookups]);
+
+  const loadViews = useCallback(async () => {
+    const { data } = await supabase.from("saved_views").select("*").order("created_at", { ascending: false });
+    setSavedViews(data || []);
+  }, []);
+  useEffect(() => { loadViews(); }, [loadViews]);
 
   let list = incidents;
   if (filter === "open") list = list.filter((i) => !i.resolved_at);
@@ -478,11 +555,31 @@ function IncidentList({ incidents, lookups, org, tick, onSelect }) {
     list = list.filter((i) => (i.incident_assignments || []).some((a) => a.resolver_group_id === org.myResolverGroupId));
   }
 
+  // Quick filters — the "based on role" cases covered with one click,
+  // mirroring Jira's most popular JQL pattern (assignee = currentUser())
+  // without needing to know any query syntax at all.
+  if (quickFilter === "mine" && org?.myUserId) {
+    list = list.filter((i) => (i.incident_assignments || []).some((a) => a.assigned_user_id === org.myUserId));
+  }
+  if (quickFilter === "unassigned") {
+    list = list.filter((i) => !(i.incident_assignments || []).some((a) => a.assigned_user_id));
+  }
+  if (quickFilter === "overdue") {
+    list = list.filter((i) => !i.resolved_at && new Date(i.created_at).getTime() + i.sla_minutes * 60000 < Date.now());
+  }
+
   if (range !== "all") {
     const days = { "7d": 7, "30d": 30, "90d": 90 }[range];
     const cutoff = Date.now() - days * 86400000;
     list = list.filter((i) => new Date(i.created_at).getTime() >= cutoff);
   }
+
+  // Every condition is combined with AND only — deliberately. A decade of
+  // ServiceNow forum threads (2014-2024) shows even experienced admins
+  // getting tripped up by AND/OR precedence in their Condition Builder,
+  // including a March 2026 "Known Error" where it silently drops what was
+  // just filtered. Flat AND avoids that entire category of confusion.
+  conditions.forEach((c) => { list = list.filter((i) => evaluateCondition(i, c, fieldDefs)); });
 
   // One search box searching everything a person would actually remember
   // about a past incident — title, notes, reference number, category,
@@ -499,6 +596,32 @@ function IncidentList({ incidents, lookups, org, tick, onSelect }) {
       i.resolution_class?.toLowerCase().includes(q) ||
       (i.incident_custom_values || []).some((v) => v.value?.toLowerCase().includes(q))
     );
+  }
+
+  function addCondition() {
+    const first = fieldDefs[0];
+    setConditions((prev) => [...prev, { field: first.key, operator: first.type === "date" ? "last_n_days" : "is", value: first.type === "date" ? "30" : (first.options?.[0] || "") }]);
+  }
+  function updateCondition(idx, patch) {
+    setConditions((prev) => prev.map((c, i) => i === idx ? { ...c, ...patch } : c));
+  }
+  function removeCondition(idx) {
+    setConditions((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function saveView() {
+    if (!viewName.trim()) return;
+    await supabase.from("saved_views").insert({ org_id: org.id, name: viewName, filter_json: { filter, scope, quickFilter, conditions } });
+    setViewName("");
+    await loadViews();
+  }
+  function applyView(v) {
+    const f = v.filter_json;
+    setFilter(f.filter ?? "open"); setScope(f.scope ?? "all"); setQuickFilter(f.quickFilter ?? null); setConditions(f.conditions ?? []);
+  }
+  async function deleteView(id) {
+    await supabase.from("saved_views").delete().eq("id", id);
+    await loadViews();
   }
 
   return (
@@ -519,6 +642,90 @@ function IncidentList({ incidents, lookups, org, tick, onSelect }) {
           ))}
         </div>
       )}
+
+      {/* Quick filters — one click, no query-building knowledge needed at all */}
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {[["mine", "Assigned to me"], ["unassigned", "Unassigned"], ["overdue", "Overdue"]].map(([val, label]) => (
+          <button key={val} onClick={() => setQuickFilter(quickFilter === val ? null : val)} className="px-3 py-1.5 rounded-full text-xs font-medium"
+            style={{ background: quickFilter === val ? COLORS.amber + "22" : COLORS.surface, color: quickFilter === val ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+            {label}
+          </button>
+        ))}
+        <button onClick={() => setShowBuilder((s) => !s)} className="px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-1"
+          style={{ background: conditions.length ? COLORS.teal + "22" : COLORS.surface, color: conditions.length ? COLORS.teal : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+          <Filter size={12} /> {conditions.length ? `${conditions.length} filter${conditions.length > 1 ? "s" : ""}` : "More filters"}
+        </button>
+      </div>
+
+      {savedViews.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {savedViews.map((v) => (
+            <div key={v.id} className="flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full text-xs" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, color: COLORS.muted }}>
+              <button onClick={() => applyView(v)}>{v.name}</button>
+              <button onClick={() => deleteView(v.id)} className="p-0.5"><X size={11} color={COLORS.faint} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showBuilder && (
+        <div className="rounded-xl p-3 mb-3" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          <p className="text-[11px] mb-2" style={{ color: COLORS.faint }}>All conditions must match — no AND/OR mixing, so there's nothing to get wrong.</p>
+          {conditions.map((c, idx) => {
+            const def = fieldDefs.find((f) => f.key === c.field);
+            return (
+              <div key={idx} className="flex items-center gap-1.5 mb-2 flex-wrap">
+                <select value={c.field} onChange={(e) => {
+                  const nd = fieldDefs.find((f) => f.key === e.target.value);
+                  updateCondition(idx, { field: e.target.value, operator: nd.type === "date" ? "last_n_days" : "is", value: nd.type === "date" ? "30" : (nd.options?.[0] || "") });
+                }} className="sd-in6">
+                  {fieldDefs.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+                </select>
+
+                {def?.type === "date" ? (
+                  <>
+                    <span className="text-xs" style={{ color: COLORS.faint }}>in the last</span>
+                    <select value={c.value} onChange={(e) => updateCondition(idx, { value: e.target.value })} className="sd-in6" style={{ width: 90 }}>
+                      <option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option>
+                    </select>
+                  </>
+                ) : def?.type === "checkbox" ? (
+                  <select value={c.operator} onChange={(e) => updateCondition(idx, { operator: e.target.value })} className="sd-in6">
+                    <option value="checked">is checked</option><option value="unchecked">is unchecked</option>
+                  </select>
+                ) : (
+                  <>
+                    <select value={c.operator} onChange={(e) => updateCondition(idx, { operator: e.target.value })} className="sd-in6" style={{ width: 100 }}>
+                      <option value="is">is</option><option value="is_not">is not</option>
+                      {def?.type === "text" && <option value="contains">contains</option>}
+                      <option value="is_empty">is empty</option>
+                    </select>
+                    {c.operator !== "is_empty" && (
+                      def?.options?.length > 0 ? (
+                        <select value={c.value} onChange={(e) => updateCondition(idx, { value: e.target.value })} className="sd-in6">
+                          {def.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                        </select>
+                      ) : (
+                        <input value={c.value} onChange={(e) => updateCondition(idx, { value: e.target.value })} className="sd-in6" style={{ width: 120 }} />
+                      )
+                    )}
+                  </>
+                )}
+                <button onClick={() => removeCondition(idx)}><X size={13} color={COLORS.faint} /></button>
+              </div>
+            );
+          })}
+          <button onClick={addCondition} className="text-xs mb-3" style={{ color: COLORS.amber }}>+ Add condition</button>
+          {conditions.length > 0 && (
+            <div className="flex items-center gap-2 pt-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+              <input value={viewName} onChange={(e) => setViewName(e.target.value)} placeholder="Save this as a view…" className="sd-in6 flex-1" />
+              <button onClick={saveView} className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>Save</button>
+            </div>
+          )}
+          <style>{`.sd-in6 { background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 6px 8px; font-size: 12px; color: ${COLORS.text}; }`}</style>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <div className="flex gap-1.5">
           {["open", "resolved", "all"].map((f) => (
@@ -542,7 +749,13 @@ function IncidentList({ incidents, lookups, org, tick, onSelect }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap mb-1">
                 <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
+                {inc.record_type === "service_request" && (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.blue, background: COLORS.blue + "22" }}>REQUEST</span>
+                )}
                 <SeverityPill name={inc.severity?.name} /><StatusPill name={inc.status?.name} />
+                {inc.approval_status === "pending" && (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.amber, background: COLORS.amber + "22" }}>AWAITING APPROVAL</span>
+                )}
               </div>
               <div className="text-sm font-medium truncate">{inc.title}</div>
               <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>{inc.category?.name} · via {inc.source}{inc.rca_category?.name ? ` · ${inc.rca_category.name}` : ""}</div>
@@ -570,13 +783,15 @@ function NewIncident({ lookups, org, onCreated }) {
   );
 }
 
-async function insertIncident({ title, notes, categoryId, severityId, slaMinutes, resolverGroupIds, org, identity, customValues }) {
-  const displayId = `INC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+async function insertIncident({ title, notes, categoryId, severityId, slaMinutes, resolverGroupIds, org, identity, customValues, recordType, requiresApproval }) {
+  const prefix = recordType === "service_request" ? "REQ" : "INC";
+  const displayId = `${prefix}-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
   const { data: statusRow } = await supabase.from("statuses").select("id").eq("org_id", org.id).order("sort_order").limit(1).maybeSingle();
 
   const { data: inc, error } = await supabase.from("incidents").insert({
-    org_id: org.id, display_id: displayId, title, notes: redactPII(notes),
+    org_id: org.id, display_id: displayId, title: redactPII(title), notes: redactPII(notes),
     category_id: categoryId, severity_id: severityId, status_id: statusRow?.id, sla_minutes: slaMinutes,
+    record_type: recordType || "incident", approval_status: requiresApproval ? "pending" : "not_required",
   }).select().single();
   if (error) throw error;
 
@@ -614,16 +829,44 @@ function IncidentForm({ lookups, org, onCreated }) {
   const [categoryId, setCategoryId] = useState(lookups.categories[0]?.id || "");
   const [severityId, setSeverityId] = useState(lookups.severities[0]?.id || "");
   const [resolverGroupIds, setResolverGroupIds] = useState(lookups.resolverGroups[0] ? [lookups.resolverGroups[0].id] : []);
+  const [groupManuallySet, setGroupManuallySet] = useState(false);
   const [customerName, setCustomerName] = useState("");
   const [customerContact, setCustomerContact] = useState("");
   const [consent, setConsent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warn, setWarn] = useState(false);
   const [customValues, setCustomValues] = useState({});
+  const [recordType, setRecordType] = useState("incident");
+  const [catalogItemId, setCatalogItemId] = useState("");
 
   const hasContact = customerName.trim() || customerContact.trim();
 
+  function applyCatalogItem(itemId) {
+    setCatalogItemId(itemId);
+    const item = (lookups.catalogItems || []).find((c) => c.id === itemId);
+    if (item) {
+      setTitle(item.name);
+      if (item.category_id) setCategoryId(item.category_id);
+      if (item.default_resolver_group_id) { setResolverGroupIds([item.default_resolver_group_id]); setGroupManuallySet(true); }
+    }
+  }
+
+  // Routes to the category's configured default team automatically — this
+  // field existed in the database since the schema was first built but was
+  // never actually connected to anything until now. Stops the moment
+  // someone manually changes the group themselves, so it never fights a
+  // deliberate choice (the "assignment pinball" failure mode the research
+  // specifically flagged in Jira automation setups).
+  useEffect(() => {
+    if (groupManuallySet) return;
+    const cat = lookups.categories.find((c) => c.id === categoryId);
+    if (cat?.default_resolver_group_id) {
+      setResolverGroupIds([cat.default_resolver_group_id]);
+    }
+  }, [categoryId, groupManuallySet, lookups.categories]);
+
   function toggleGroup(id) {
+    setGroupManuallySet(true);
     setResolverGroupIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }
   function setCustomValue(fieldId, value) {
@@ -638,9 +881,11 @@ function IncidentForm({ lookups, org, onCreated }) {
     setSaving(true);
     const sev = lookups.severities.find((s) => s.id === severityId);
     try {
+      const catalogItem = (lookups.catalogItems || []).find((c) => c.id === catalogItemId);
       await insertIncident({
         title, notes, categoryId, severityId, slaMinutes: sev.sla_minutes, resolverGroupIds, org,
         identity: { customerName, customerContact, consent }, customValues,
+        recordType, requiresApproval: recordType === "service_request" && catalogItem?.requires_approval,
       });
       await onCreated();
     } finally { setSaving(false); }
@@ -648,6 +893,22 @@ function IncidentForm({ lookups, org, onCreated }) {
 
   return (
     <Panel title="Log a new incident" icon={Plus}>
+      <div className="flex gap-1.5 mb-3">
+        {[["incident", "Incident — something's broken"], ["service_request", "Request — something's needed"]].map(([val, label]) => (
+          <button key={val} type="button" onClick={() => setRecordType(val)} className="text-xs px-2.5 py-1.5 rounded-full"
+            style={{ background: recordType === val ? COLORS.amber + "22" : COLORS.surfaceHi, color: recordType === val ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {recordType === "service_request" && (lookups.catalogItems || []).length > 0 && (
+        <Field label="From the catalog (optional)">
+          <select value={catalogItemId} onChange={(e) => applyCatalogItem(e.target.value)} className="sd-in">
+            <option value="">Custom request — not from the catalog</option>
+            {lookups.catalogItems.map((c) => <option key={c.id} value={c.id}>{c.name}{c.requires_approval ? " (needs approval)" : ""}</option>)}
+          </select>
+        </Field>
+      )}
       <Field label="Title"><input value={title} onChange={(e) => setTitle(e.target.value)} className="sd-in" placeholder="Short summary" /></Field>
       <Field label="Notes"><textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="sd-in" placeholder="Technical detail — avoid names, numbers, ID numbers" /></Field>
       <div className="grid grid-cols-2 gap-3">
@@ -671,6 +932,9 @@ function IncidentForm({ lookups, org, onCreated }) {
             </button>
           ))}
         </div>
+        {!groupManuallySet && lookups.categories.find((c) => c.id === categoryId)?.default_resolver_group_id && (
+          <p className="text-[11px] mt-1.5" style={{ color: COLORS.faint }}>Auto-routed from category — click a group above to override.</p>
+        )}
       </Field>
       {org.identity_module_enabled && (
         <>
@@ -764,7 +1028,7 @@ function ChatIntake({ lookups, org, onCreated }) {
 }
 
 /* ============================== INCIDENT DETAIL ============================= */
-function IncidentDetail({ incident, lookups, org, onBack, onChanged, showToast }) {
+function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, showToast }) {
   const [rcaCategoryId, setRcaCategoryId] = useState(incident.rca_category?.id || "");
   const [resolutionClass, setResolutionClass] = useState(incident.resolution_class || "");
   const [aiLoading, setAiLoading] = useState("");
@@ -898,6 +1162,8 @@ function IncidentDetail({ incident, lookups, org, onBack, onChanged, showToast }
         </select>
       </Panel>
 
+      <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
+
       <Panel title="AI mitigation suggestion" icon={Sparkles}>
         <p className="text-sm mb-2 whitespace-pre-wrap">{incident.ai_mitigation || "No suggestion yet."}</p>
         <button onClick={suggestMitigation} disabled={aiLoading === "mitigation"} className="sd-btn-g">{aiLoading === "mitigation" ? "Thinking…" : "Ask AI"}</button>
@@ -979,6 +1245,16 @@ function IncidentDetail({ incident, lookups, org, onBack, onChanged, showToast }
       )}
 
       <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
+
+      <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
+
+      <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />
+
+      {incident.record_type === "service_request" && incident.approval_status === "pending" && (
+        <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
+      )}
+
+      <CommentsPanel incident={incident} org={org} onChanged={onChanged} />
 
       <Panel title="Timeline" icon={Clock}>
         {(incident.incident_timeline || []).sort((a, b) => new Date(a.ts) - new Date(b.ts)).map((t) => (
@@ -1219,6 +1495,10 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
       <TeamAssignmentPanel org={org} lookups={lookups} showToast={showToast} />
 
       <CustomFieldsPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+
+      <ServiceCatalogPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+
+      <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
 
       <OnCallPanel org={org} lookups={lookups} showToast={showToast} />
 
@@ -2597,6 +2877,703 @@ function InvitePanel({ org, lookups, showToast }) {
         })}
         {invites.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No invites yet.</p>}
       </div>
+    </Panel>
+  );
+}
+
+/* ================================= COMMENTS PANEL ============================== */
+// Two threads, kept visibly separate so nobody accidentally posts something
+// internal into the customer-visible one: internal notes for staff-to-staff
+// context, and a customer thread that's the other end of the portal's
+// tracking link.
+function CommentsPanel({ incident, org, onChanged }) {
+  const [comments, setComments] = useState([]);
+  const [tab, setTab] = useState("internal");
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("incident_comments").select("*").eq("incident_id", incident.id).order("created_at", { ascending: true });
+    setComments(data || []);
+  }, [incident.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function post() {
+    if (!draft.trim()) return;
+    setSending(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from("incident_comments").insert({
+      incident_id: incident.id, org_id: org.id, author_type: "staff", author_user_id: session?.user?.id || null,
+      visibility: tab, body: redactPII(draft),
+    });
+    setDraft(""); setSending(false);
+    await load(); onChanged();
+  }
+
+  const filtered = comments.filter((c) => tab === "internal" ? c.visibility === "internal" : c.visibility === "customer");
+  const isCustomer = tab === "customer";
+  // Deliberately not just a color on the tab pill — ServiceNow/Jira forum
+  // threads show experienced admins getting confused about audience months
+  // in, and the most-documented failure ("work note bleed") happens exactly
+  // at the point someone types into the wrong box. So the audience is
+  // restated at the compose box itself, not just the tab above it.
+  const accent = isCustomer ? COLORS.teal : COLORS.amber;
+
+  return (
+    <Panel title="Comments" icon={MessageSquare}>
+      <div className="flex gap-1.5 mb-3">
+        <button onClick={() => setTab("internal")} className="px-3 py-1.5 rounded-full text-xs font-medium" style={{ background: tab === "internal" ? COLORS.amber + "22" : COLORS.surface, color: tab === "internal" ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>Internal notes</button>
+        <button onClick={() => setTab("customer")} className="px-3 py-1.5 rounded-full text-xs font-medium" style={{ background: tab === "customer" ? COLORS.teal + "22" : COLORS.surface, color: tab === "customer" ? COLORS.teal : COLORS.muted, border: `1px solid ${COLORS.border}` }}>Customer-visible</button>
+      </div>
+
+      <div className="space-y-2 mb-3 max-h-56 overflow-y-auto">
+        {filtered.map((c) => (
+          <div key={c.id} className="text-xs p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <div className="mb-1" style={{ color: COLORS.faint }}>{c.author_type === "customer" ? "Customer" : "Staff"} · {new Date(c.created_at).toLocaleString()}</div>
+            <div style={{ color: COLORS.text }}>{c.body}</div>
+          </div>
+        ))}
+        {filtered.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No {tab === "internal" ? "internal notes" : "customer messages"} yet.</p>}
+      </div>
+
+      <div className="rounded-lg p-2.5" style={{ background: accent + "0f", border: `1px solid ${accent}55` }}>
+        <div className="flex items-center gap-1.5 mb-2 text-[11px] font-medium" style={{ color: accent }}>
+          {isCustomer ? <><Users size={12} /> The customer can see this and reply</> : <><Lock size={12} /> Only your team can see this</>}
+        </div>
+        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} className="sd-in3" style={{ borderColor: accent + "55" }}
+          placeholder={isCustomer ? "Message the customer will see…" : "Note for other staff…"} />
+        <button onClick={post} disabled={sending || !draft.trim()} className="mt-2 py-1.5 px-3 rounded-lg text-xs font-semibold" style={{ background: accent, color: "#0A1120" }}>
+          {sending ? "Posting…" : isCustomer ? "Post — customer will see this" : "Post internal note"}
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ================================= ASSIGNEE PANEL ============================== */
+// The free equivalent of ServiceNow's Advanced Work Assignment module (a
+// separately licensed add-on for suggesting who in a group should take a
+// ticket) and something Jira doesn't have natively at all for assignment
+// groups. Computed client-side from data already loaded — no extra module,
+// no extra cost, just counting who on the team currently has the fewest
+// open incidents.
+function AssigneePanel({ incident, incidents, onChanged, showToast }) {
+  const [members, setMembers] = useState([]);
+  const assignment = incident.incident_assignments?.[0];
+  const groupId = assignment?.resolver_group_id;
+
+  const load = useCallback(async () => {
+    if (!groupId) { setMembers([]); return; }
+    const { data } = await supabase.rpc("list_org_members");
+    setMembers((data || []).filter((m) => m.resolver_group_id === groupId));
+  }, [groupId]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!groupId) return null;
+
+  // Open-incident count per member, from data already sitting in memory —
+  // no extra query needed.
+  const workload = members.map((m) => {
+    const openCount = incidents.filter((i) =>
+      !i.resolved_at && (i.incident_assignments || []).some((a) => a.assigned_user_id === m.user_id)
+    ).length;
+    return { ...m, openCount };
+  }).sort((a, b) => a.openCount - b.openCount);
+
+  const suggested = workload[0];
+  const currentlyAssigned = members.find((m) => m.user_id === assignment.assigned_user_id);
+
+  async function assignTo(userId) {
+    await supabase.from("incident_assignments").update({ assigned_user_id: userId || null }).eq("id", assignment.id);
+    showToast(userId ? "Assigned" : "Unassigned");
+    await onChanged();
+  }
+
+  return (
+    <Panel title="Assigned to" icon={Users}>
+      {members.length === 0 ? (
+        <p className="text-xs" style={{ color: COLORS.faint }}>Nobody is on the assigned team yet — add people in Settings → Team assignment.</p>
+      ) : (
+        <>
+          <select value={assignment.assigned_user_id || ""} onChange={(e) => assignTo(e.target.value)} className="sd-in3 mb-2">
+            <option value="">Unassigned</option>
+            {members.map((m) => <option key={m.user_id} value={m.user_id}>{m.email}</option>)}
+          </select>
+          {suggested && suggested.user_id !== assignment.assigned_user_id && (
+            <button onClick={() => assignTo(suggested.user_id)} className="sd-btn-g text-[11px]">
+              Suggest: {suggested.email} (currently {suggested.openCount} open)
+            </button>
+          )}
+          {currentlyAssigned && (
+            <p className="text-[11px] mt-1.5" style={{ color: COLORS.faint }}>{currentlyAssigned.email} currently has {workload.find((w) => w.user_id === currentlyAssigned.user_id)?.openCount} open incident(s).</p>
+          )}
+        </>
+      )}
+    </Panel>
+  );
+}
+
+/* ================================= PROBLEMS VIEW ============================== */
+// Problem Management, deliberately not gated behind a special role and not
+// restricted to only-after-resolution — both real ServiceNow limitations
+// found in research. Any staff member can flag "this looks like a pattern"
+// the moment they suspect it, from an incident in any status.
+function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident }) {
+  const [problems, setProblems] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [rcaCategoryId, setRcaCategoryId] = useState("");
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("problems").select("*, rca_categories(name), problem_incidents(incident_id, incidents(display_id, title))").order("created_at", { ascending: false });
+    setProblems(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function createProblem() {
+    if (!title.trim()) { showToast("Give the problem a title"); return; }
+    const displayId = `PRB-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from("problems").insert({
+      org_id: org.id, display_id: displayId, title: redactPII(title), description: redactPII(description), rca_category_id: rcaCategoryId || null, created_by: session?.user?.id || null,
+    });
+    setTitle(""); setDescription(""); setRcaCategoryId("");
+    showToast("Problem created");
+    await load();
+  }
+
+  async function setStatus(id, status) {
+    await supabase.from("problems").update({ status, resolved_at: status === "resolved" ? new Date().toISOString() : null }).eq("id", id);
+    await load();
+    if (selected?.id === id) setSelected((s) => ({ ...s, status }));
+  }
+  async function setWorkaround(id, workaround) {
+    const redacted = redactPII(workaround);
+    await supabase.from("problems").update({ workaround: redacted, status: "known_error" }).eq("id", id);
+    await load();
+    if (selected?.id === id) setSelected((s) => ({ ...s, workaround: redacted, status: "known_error" }));
+  }
+  async function unlink(problemId, incidentId) {
+    await supabase.from("problem_incidents").delete().eq("problem_id", problemId).eq("incident_id", incidentId);
+    await load();
+  }
+
+  const statusColor = { investigating: COLORS.amber, known_error: COLORS.blue, resolved: COLORS.teal, closed: COLORS.faint };
+
+  if (selected) {
+    const p = problems.find((x) => x.id === selected.id) || selected;
+    return (
+      <div className="pb-6">
+        <button onClick={() => setSelected(null)} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to problems</button>
+        <Panel title={p.title} icon={Layers}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{p.display_id}</span>
+            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase" style={{ color: statusColor[p.status], background: statusColor[p.status] + "22" }}>{p.status.replace("_", " ")}</span>
+          </div>
+          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>{p.description}</p>
+          <select value={p.status} onChange={(e) => setStatus(p.id, e.target.value)} className="sd-in3 mb-3">
+            <option value="investigating">Investigating</option>
+            <option value="known_error">Known error (workaround available)</option>
+            <option value="resolved">Resolved</option>
+            <option value="closed">Closed</option>
+          </select>
+          <Field label="Workaround — shown on every linked incident while it's being worked, not just after">
+            <textarea defaultValue={p.workaround || ""} onBlur={(e) => setWorkaround(p.id, e.target.value)} rows={2} className="sd-in3" placeholder="What can an agent do right now, before this is fully fixed?" />
+          </Field>
+        </Panel>
+        <Panel title="Linked incidents" icon={AlertTriangle}>
+          {(p.problem_incidents || []).map((pi) => (
+            <div key={pi.incident_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+              <button onClick={() => onOpenIncident(pi.incident_id)} className="sd-mono text-xs underline" style={{ color: COLORS.muted }}>{pi.incidents?.display_id} — {pi.incidents?.title}</button>
+              <button onClick={() => unlink(p.id, pi.incident_id)}><X size={13} color={COLORS.faint} /></button>
+            </div>
+          ))}
+          {(p.problem_incidents || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No incidents linked yet — link one from its detail page.</p>}
+        </Panel>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pb-6">
+      <Panel title="New problem" icon={Layers}>
+        <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+          Anyone can create one, from an incident in any status — not gated to a special role, not restricted to only after something's resolved.
+        </p>
+        <Field label="Title"><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What's the underlying pattern?" className="sd-in3" /></Field>
+        <Field label="Description"><textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="sd-in3" /></Field>
+        <Field label="Root cause category (optional)">
+          <select value={rcaCategoryId} onChange={(e) => setRcaCategoryId(e.target.value)} className="sd-in3">
+            <option value="">Choose…</option>
+            {lookups.rcaCategories.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </Field>
+        <button onClick={createProblem} className="sd-btn-g">Create problem</button>
+      </Panel>
+
+      <Panel title="All problems" icon={Layers}>
+        <div className="space-y-2">
+          {problems.map((p) => (
+            <button key={p.id} onClick={() => setSelected(p)} className="w-full text-left p-2.5 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <div className="flex items-center justify-between">
+                <span style={{ color: COLORS.text }}>{p.title}</span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase" style={{ color: statusColor[p.status], background: statusColor[p.status] + "22" }}>{p.status.replace("_", " ")}</span>
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{p.display_id} · {(p.problem_incidents || []).length} linked incident(s)</div>
+            </button>
+          ))}
+          {problems.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No problems logged yet.</p>}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* ========================= PROBLEM LINK PANEL (incident detail) ============== */
+// The actual win over ServiceNow: the workaround shows right here, while
+// the incident is being worked — not only in a lessons-learned document
+// someone reads after the fact.
+function ProblemLinkPanel({ incident, lookups, org, onChanged, showToast }) {
+  const [problems, setProblems] = useState([]);
+  const [pickId, setPickId] = useState("");
+  const linked = incident.problem_incidents?.[0];
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("problems").select("*").order("created_at", { ascending: false });
+    setProblems(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function linkExisting() {
+    if (!pickId) return;
+    await supabase.from("problem_incidents").insert({ problem_id: pickId, incident_id: incident.id, org_id: org.id });
+    showToast("Linked to problem");
+    setPickId("");
+    await onChanged();
+  }
+
+  async function createAndLink() {
+    const displayId = `PRB-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data: prob } = await supabase.from("problems").insert({
+      org_id: org.id, display_id: displayId, title: redactPII(incident.title), rca_category_id: incident.rca_category?.id || null, created_by: session?.user?.id || null,
+    }).select().single();
+    if (prob) await supabase.from("problem_incidents").insert({ problem_id: prob.id, incident_id: incident.id, org_id: org.id });
+    showToast("Problem created and linked");
+    await onChanged();
+  }
+
+  async function unlink() {
+    await supabase.from("problem_incidents").delete().eq("problem_id", linked.problem_id).eq("incident_id", incident.id);
+    showToast("Unlinked");
+    await onChanged();
+  }
+
+  const linkedProblem = linked ? problems.find((p) => p.id === linked.problem_id) || linked.problems : null;
+
+  return (
+    <Panel title="Problem" icon={Layers}>
+      {linkedProblem ? (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm" style={{ color: COLORS.text }}>{linkedProblem.title || linkedProblem.display_id}</span>
+            <button onClick={unlink} className="text-[11px]" style={{ color: COLORS.red }}>Unlink</button>
+          </div>
+          {linkedProblem.status === "known_error" && linkedProblem.workaround && (
+            <div className="rounded-lg p-2.5" style={{ background: COLORS.blue + "18", border: `1px solid ${COLORS.blue}44` }}>
+              <div className="text-[11px] font-semibold mb-1" style={{ color: COLORS.blue }}>Known workaround</div>
+              <p className="text-sm" style={{ color: COLORS.text }}>{linkedProblem.workaround}</p>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>Think this might be part of a recurring pattern? Link it now — doesn't need to wait until this is resolved.</p>
+          <div className="flex gap-2 mb-2">
+            <select value={pickId} onChange={(e) => setPickId(e.target.value)} className="sd-in3 flex-1">
+              <option value="">Choose an existing problem…</option>
+              {problems.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+            </select>
+            <button onClick={linkExisting} disabled={!pickId} className="sd-btn-g">Link</button>
+          </div>
+          <button onClick={createAndLink} className="sd-btn-g">Create new problem from this incident</button>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+/* ============================ APPROVAL PANEL (service requests) ============= */
+// Fixes a documented ServiceNow bug: rejecting an approval does NOT
+// automatically close the request there, leaving it stuck. Here, one
+// decision handles both — approve moves it into the normal resolver
+// queue, reject closes it in the same transaction, every time.
+function ApprovalPanel({ incident, org, onChanged, showToast }) {
+  const [loading, setLoading] = useState(false);
+  const canApprove = org.myRole === "owner" || org.myRole === "admin";
+
+  async function decide(decision) {
+    setLoading(true);
+    const { error } = await supabase.rpc("set_request_approval", { target_incident_id: incident.id, decision });
+    setLoading(false);
+    if (error) { showToast(error.message); return; }
+    showToast(`Request ${decision}`);
+    await onChanged();
+  }
+
+  return (
+    <Panel title="Awaiting approval" icon={ShieldCheck}>
+      {canApprove ? (
+        <>
+          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>This service request needs approval before it moves to the resolver queue.</p>
+          <div className="flex gap-2">
+            <button onClick={() => decide("approved")} disabled={loading} className="flex-1 py-2 rounded-lg text-sm font-semibold" style={{ background: COLORS.teal, color: "#0A1120" }}>Approve</button>
+            <button onClick={() => decide("rejected")} disabled={loading} className="flex-1 py-2 rounded-lg text-sm font-semibold" style={{ background: COLORS.red, color: "#fff" }}>Reject</button>
+          </div>
+        </>
+      ) : (
+        <p className="text-sm" style={{ color: COLORS.muted }}>Waiting on an owner or admin to approve this request.</p>
+      )}
+    </Panel>
+  );
+}
+
+/* ============================== SERVICE CATALOG PANEL (Settings) ============= */
+function ServiceCatalogPanel({ org, lookups, onLookupsChanged, showToast }) {
+  const [name, setName] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [groupId, setGroupId] = useState("");
+  const [requiresApproval, setRequiresApproval] = useState(false);
+
+  async function addItem() {
+    if (!name.trim()) { showToast("Give the request type a name"); return; }
+    await supabase.from("service_catalog_items").insert({
+      org_id: org.id, name, category_id: categoryId || null, default_resolver_group_id: groupId || null, requires_approval: requiresApproval,
+    });
+    setName(""); setCategoryId(""); setGroupId(""); setRequiresApproval(false);
+    showToast("Added to catalog");
+    await onLookupsChanged();
+  }
+  async function removeItem(id) {
+    await supabase.from("service_catalog_items").delete().eq("id", id);
+    await onLookupsChanged();
+  }
+
+  return (
+    <Panel title="Service catalog" icon={Layers}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Predefined request types staff can pick from when logging a "Request" instead of an "Incident" — e.g. new laptop, software access, password reset.
+      </p>
+      <div className="space-y-2 mb-4">
+        {(lookups.catalogItems || []).map((c) => (
+          <div key={c.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <span style={{ color: COLORS.text }}>{c.name}{c.requires_approval ? " · needs approval" : ""}</span>
+            <button onClick={() => removeItem(c.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+          </div>
+        ))}
+        {(lookups.catalogItems || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No catalog items yet — requests can still be logged freeform without one.</p>}
+      </div>
+      <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. New laptop" className="sd-in5" /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Default category (optional)">
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="sd-in5">
+            <option value="">None</option>
+            {lookups.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Default team (optional)">
+          <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="sd-in5">
+            <option value="">None</option>
+            {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <label className="flex items-center gap-2 text-xs mb-3" style={{ color: COLORS.muted }}>
+        <input type="checkbox" checked={requiresApproval} onChange={(e) => setRequiresApproval(e.target.checked)} />
+        Requires owner/admin approval before work begins
+      </label>
+      <button onClick={addItem} className="sd-btn-p6">Add to catalog</button>
+    </Panel>
+  );
+}
+
+/* ================================= ASSETS / CMDB VIEW ============================== */
+// Configuration Management, deliberately single-source-of-truth — no
+// automated discovery, no multi-source reconciliation. That's not a
+// missing feature; it's what avoids the ~75% CMDB failure rate Gartner
+// data attributes almost entirely to duplicate/stale records from
+// multiple unreconciled discovery sources. One person enters what they
+// actually know, and "last reviewed" is a manual confirmation, not a
+// background job silently trusting or retiring records on its own.
+function AssetsView({ org, lookups, showToast, onOpenIncident }) {
+  const [items, setItems] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [filterType, setFilterType] = useState("");
+  const [name, setName] = useState("");
+  const [typeId, setTypeId] = useState("");
+  const [attrRows, setAttrRows] = useState([{ key: "", value: "" }]);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("configuration_items").select("*, ci_types(name, is_service), resolver_groups(name)").order("name");
+    setItems(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function createItem() {
+    if (!name.trim()) { showToast("Give it a name"); return; }
+    const displayId = `CI-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const attributes = Object.fromEntries(attrRows.filter((r) => r.key.trim()).map((r) => [r.key.trim(), redactPII(r.value)]));
+    await supabase.from("configuration_items").insert({ org_id: org.id, display_id: displayId, name, ci_type_id: typeId || null, attributes });
+    setName(""); setTypeId(""); setAttrRows([{ key: "", value: "" }]);
+    showToast("Added");
+    await load();
+  }
+
+  async function markReviewed(id) {
+    await supabase.from("configuration_items").update({ last_reviewed_at: new Date().toISOString() }).eq("id", id);
+    showToast("Marked reviewed");
+    await load();
+  }
+  async function setItemStatus(id, status) {
+    await supabase.from("configuration_items").update({ status }).eq("id", id);
+    await load();
+  }
+
+  const isStale = (ci) => new Date(ci.last_reviewed_at).getTime() < Date.now() - 90 * 86400000;
+  const filtered = filterType ? items.filter((i) => i.ci_type_id === filterType) : items;
+
+  if (selected) {
+    return <AssetDetail item={selected} org={org} lookups={lookups} items={items} onBack={() => setSelected(null)} onChanged={load} onOpenIncident={onOpenIncident} showToast={showToast} />;
+  }
+
+  return (
+    <div className="pb-6">
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <StatCard icon={Server} label="Total" value={items.length} color={COLORS.blue} />
+        <StatCard icon={Clock} label="Needs review" value={items.filter(isStale).length} color={COLORS.amber} />
+        <StatCard icon={CheckCircle2} label="Active" value={items.filter((i) => i.status === "active").length} color={COLORS.teal} />
+      </div>
+
+      <Panel title="Add configuration item" icon={Server}>
+        <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Primary file server, Accounting app" className="sd-in3" /></Field>
+        <Field label="Type">
+          <select value={typeId} onChange={(e) => setTypeId(e.target.value)} className="sd-in3">
+            <option value="">Choose…</option>
+            {(lookups.ciTypes || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Attributes (optional — serial number, IP, location, whatever matters)">
+          {attrRows.map((row, idx) => (
+            <div key={idx} className="flex gap-1.5 mb-1.5">
+              <input value={row.key} onChange={(e) => setAttrRows((prev) => prev.map((r, i) => i === idx ? { ...r, key: e.target.value } : r))} placeholder="Field" className="sd-in3" style={{ flex: 1 }} />
+              <input value={row.value} onChange={(e) => setAttrRows((prev) => prev.map((r, i) => i === idx ? { ...r, value: e.target.value } : r))} placeholder="Value" className="sd-in3" style={{ flex: 1 }} />
+            </div>
+          ))}
+          <button onClick={() => setAttrRows((prev) => [...prev, { key: "", value: "" }])} className="text-xs" style={{ color: COLORS.amber }}>+ Add attribute</button>
+        </Field>
+        <button onClick={createItem} className="sd-btn-g">Add</button>
+      </Panel>
+
+      <Panel title="Configuration items" icon={Layers}>
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          <button onClick={() => setFilterType("")} className="px-2.5 py-1 rounded-full text-xs" style={{ background: !filterType ? COLORS.amber + "22" : COLORS.surfaceHi, color: !filterType ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>All</button>
+          {(lookups.ciTypes || []).map((t) => (
+            <button key={t.id} onClick={() => setFilterType(t.id)} className="px-2.5 py-1 rounded-full text-xs" style={{ background: filterType === t.id ? COLORS.amber + "22" : COLORS.surfaceHi, color: filterType === t.id ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>{t.name}</button>
+          ))}
+        </div>
+        <div className="space-y-2">
+          {filtered.map((ci) => (
+            <div key={ci.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, opacity: ci.status === "retired" ? 0.55 : 1 }}>
+              <button onClick={() => setSelected(ci)} className="w-full text-left">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm" style={{ color: COLORS.text }}>{ci.name}</span>
+                  {isStale(ci) && ci.status === "active" && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.amber, background: COLORS.amber + "22" }}>NEEDS REVIEW</span>}
+                </div>
+                <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{ci.display_id} · {ci.ci_types?.name || "Unclassified"}{ci.resolver_groups?.name ? ` · ${ci.resolver_groups.name}` : ""}</div>
+              </button>
+            </div>
+          ))}
+          {filtered.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No configuration items yet.</p>}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncident, showToast }) {
+  const [relatedIncidents, setRelatedIncidents] = useState([]);
+  const [relationships, setRelationships] = useState([]);
+  const [pickRelated, setPickRelated] = useState("");
+
+  const load = useCallback(async () => {
+    const [ic, rel] = await Promise.all([
+      supabase.from("incident_cis").select("incident_id, incidents(display_id, title, resolved_at)").eq("ci_id", item.id),
+      supabase.from("ci_relationships").select("*, parent:configuration_items!ci_relationships_parent_ci_id_fkey(name), child:configuration_items!ci_relationships_child_ci_id_fkey(name)").or(`parent_ci_id.eq.${item.id},child_ci_id.eq.${item.id}`),
+    ]);
+    setRelatedIncidents(ic.data || []);
+    setRelationships(rel.data || []);
+  }, [item.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function addRelationship() {
+    if (!pickRelated) return;
+    await supabase.from("ci_relationships").insert({ org_id: org.id, parent_ci_id: item.id, child_ci_id: pickRelated, relationship_type: "depends_on" });
+    setPickRelated("");
+    await load();
+  }
+  async function removeRelationship(id) {
+    await supabase.from("ci_relationships").delete().eq("id", id);
+    await load();
+  }
+  async function markReviewed() {
+    await supabase.from("configuration_items").update({ last_reviewed_at: new Date().toISOString() }).eq("id", item.id);
+    showToast("Marked reviewed");
+    await onChanged();
+  }
+  async function retire() {
+    await supabase.from("configuration_items").update({ status: "retired" }).eq("id", item.id);
+    showToast("Retired");
+    await onChanged();
+  }
+
+  return (
+    <div className="pb-6">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to assets</button>
+      <Panel title={item.name} icon={Server}>
+        <div className="flex items-center justify-between mb-2">
+          <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{item.display_id}</span>
+          {item.status === "active" ? (
+            <button onClick={retire} className="text-[11px]" style={{ color: COLORS.red }}>Retire</button>
+          ) : (
+            <span className="text-[11px]" style={{ color: COLORS.faint }}>Retired</span>
+          )}
+        </div>
+        <div className="text-xs mb-3" style={{ color: COLORS.muted }}>Last reviewed {new Date(item.last_reviewed_at).toLocaleDateString()}</div>
+        <button onClick={markReviewed} className="sd-btn-g mb-3">Mark reviewed today</button>
+        {Object.keys(item.attributes || {}).length > 0 && (
+          <div className="space-y-1">
+            {Object.entries(item.attributes).map(([k, v]) => (
+              <div key={k} className="flex justify-between text-xs"><span style={{ color: COLORS.faint }}>{k}</span><span style={{ color: COLORS.text }}>{v}</span></div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Panel title="Relationships" icon={Link2}>
+        {relationships.map((r) => (
+          <div key={r.id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+            <span style={{ color: COLORS.muted }}>
+              {r.parent_ci_id === item.id ? `depends on ${r.child?.name}` : `${r.parent?.name} depends on this`}
+            </span>
+            <button onClick={() => removeRelationship(r.id)}><X size={13} color={COLORS.faint} /></button>
+          </div>
+        ))}
+        <div className="flex gap-2 mt-2">
+          <select value={pickRelated} onChange={(e) => setPickRelated(e.target.value)} className="sd-in3 flex-1">
+            <option value="">This depends on…</option>
+            {items.filter((i) => i.id !== item.id).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+          <button onClick={addRelationship} disabled={!pickRelated} className="sd-btn-g">Link</button>
+        </div>
+      </Panel>
+
+      <Panel title="Related incidents" icon={AlertTriangle}>
+        {relatedIncidents.map((ic) => (
+          <button key={ic.incident_id} onClick={() => onOpenIncident(ic.incident_id)} className="w-full text-left text-sm py-1.5 sd-mono underline" style={{ color: COLORS.muted, borderBottom: `1px solid ${COLORS.border}` }}>
+            {ic.incidents?.display_id} — {ic.incidents?.title}
+          </button>
+        ))}
+        {relatedIncidents.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No incidents linked to this asset yet.</p>}
+      </Panel>
+    </div>
+  );
+}
+
+/* ========================= AFFECTED CIs PANEL (incident detail) ============== */
+function AffectedCIsPanel({ incident, org, onChanged, showToast }) {
+  const [allItems, setAllItems] = useState([]);
+  const [linked, setLinked] = useState([]);
+  const [pickId, setPickId] = useState("");
+
+  const load = useCallback(async () => {
+    const [all, lk] = await Promise.all([
+      supabase.from("configuration_items").select("id, name").eq("status", "active").order("name"),
+      supabase.from("incident_cis").select("ci_id, configuration_items(name, display_id)").eq("incident_id", incident.id),
+    ]);
+    setAllItems(all.data || []);
+    setLinked(lk.data || []);
+  }, [incident.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function link() {
+    if (!pickId) return;
+    await supabase.from("incident_cis").insert({ incident_id: incident.id, ci_id: pickId, org_id: org.id });
+    setPickId("");
+    showToast("Linked");
+    await load(); await onChanged();
+  }
+  async function unlink(ciId) {
+    await supabase.from("incident_cis").delete().eq("incident_id", incident.id).eq("ci_id", ciId);
+    await load(); await onChanged();
+  }
+
+  return (
+    <Panel title="Affected assets" icon={Server}>
+      {linked.map((l) => (
+        <div key={l.ci_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+          <span style={{ color: COLORS.text }}>{l.configuration_items?.name}</span>
+          <button onClick={() => unlink(l.ci_id)}><X size={13} color={COLORS.faint} /></button>
+        </div>
+      ))}
+      <div className="flex gap-2 mt-2">
+        <select value={pickId} onChange={(e) => setPickId(e.target.value)} className="sd-in3 flex-1">
+          <option value="">Which asset does this affect?</option>
+          {allItems.filter((i) => !linked.some((l) => l.ci_id === i.id)).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+        </select>
+        <button onClick={link} disabled={!pickId} className="sd-btn-g">Link</button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ============================== CI TYPES PANEL (Settings) ============= */
+function CITypesPanel({ org, lookups, onLookupsChanged, showToast }) {
+  const [name, setName] = useState("");
+  const [isService, setIsService] = useState(false);
+
+  async function addType() {
+    if (!name.trim()) { showToast("Give the type a name"); return; }
+    await supabase.from("ci_types").insert({ org_id: org.id, name, is_service: isService, sort_order: (lookups.ciTypes || []).length });
+    setName(""); setIsService(false);
+    showToast("Added");
+    await onLookupsChanged();
+  }
+  async function removeType(id) {
+    await supabase.from("ci_types").delete().eq("id", id);
+    await onLookupsChanged();
+  }
+
+  return (
+    <Panel title="Asset types" icon={Server}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        The categories your configuration items come in — e.g. Server, Application, Network Device. Mark one as a "Service" if it's business-facing rather than underlying infrastructure — Availability and Capacity tracking (coming later) will measure against Services specifically.
+      </p>
+      <div className="space-y-2 mb-4">
+        {(lookups.ciTypes || []).map((t) => (
+          <div key={t.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <span style={{ color: COLORS.text }}>{t.name}{t.is_service ? " · Service" : ""}</span>
+            <button onClick={() => removeType(t.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+          </div>
+        ))}
+        {(lookups.ciTypes || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No asset types yet.</p>}
+      </div>
+      <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Server" className="sd-in5" /></Field>
+      <label className="flex items-center gap-2 text-xs mb-3" style={{ color: COLORS.muted }}>
+        <input type="checkbox" checked={isService} onChange={(e) => setIsService(e.target.checked)} />
+        This is a business-facing Service
+      </label>
+      <button onClick={addType} className="sd-btn-p6">Add type</button>
     </Panel>
   );
 }
