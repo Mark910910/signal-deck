@@ -11,3 +11,17 @@ body { margin: 0; background: #0A1120; }
 @keyframes pulseSignal { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 .sd-pulse { animation: pulseSignal 1.6s ease-in-out infinite; }
 input, textarea, select { font-family: 'Inter', sans-serif; }
+
+/* Shared form/button styles, moved here from scattered per-component
+   <style> tags. Bug found live: several screens (Problems, Assets,
+   on-call, etc.) used these class names assuming another, unrelated
+   component would already be mounted and injecting the rule — when it
+   wasn't, inputs fell back to browser defaults with no dark background,
+   producing invisible white-on-white text. These now always exist,
+   regardless of what else is on screen. */
+.sd-in, .sd-in3, .sd-in4 { width: 100%; background: #182338; border: 1px solid #232F47; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #E8ECF3; }
+.sd-in5 { width: 100%; background: #182338; border: 1px solid #232F47; border-radius: 8px; padding: 7px 10px; font-size: 13px; color: #E8ECF3; }
+.sd-in6 { background: #182338; border: 1px solid #232F47; border-radius: 8px; padding: 6px 8px; font-size: 12px; color: #E8ECF3; }
+.sd-btn-g { background: transparent; border: 1px solid #232F47; color: #F5A623; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 8px; }
+.sd-btn-p { background: #F5A623; color: #1A1200; font-weight: 600; font-size: 13px; padding: 9px 16px; border-radius: 8px; }
+.sd-btn-p6 { background: #F5A623; color: #1A1200; font-weight: 600; font-size: 12.5px; padding: 7px 14px; border-radius: 8px; }
