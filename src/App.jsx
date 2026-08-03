@@ -247,6 +247,7 @@ function MainApp({ org, onOrgUpdated }) {
   const [lookups, setLookups] = useState(null); // resolver_groups, categories, statuses, severities, rca_categories
   const [incidents, setIncidents] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [openProblemId, setOpenProblemId] = useState(null);
   const [toast, setToast] = useState(null);
   const [tick, setTick] = useState(0);
 
@@ -331,9 +332,9 @@ function MainApp({ org, onOrgUpdated }) {
               onCreated={async () => { await loadIncidents(); setTab("incidents"); showToast("Incident logged"); }} />
           )}
           {tab === "diagnostics" && <Diagnostics org={org} lookups={lookups} />}
-          {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
+          {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} initialProblemId={openProblemId} onProblemOpened={() => setOpenProblemId(null)} />}
           {tab === "assets" && <AssetsView org={org} lookups={lookups} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
-          {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
+          {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onOpenProblem={(id) => { setOpenProblemId(id); setTab("problems"); }} />}
           {tab === "dashboards" && <CustomDashboards org={org} lookups={lookups} incidents={incidents} showToast={showToast} />}
           {tab === "privacy" && <PrivacyCenter org={org} onOrgUpdated={onOrgUpdated} incidents={incidents} showToast={showToast} />}
           {tab === "settings" && <Settings org={org} lookups={lookups} onOrgUpdated={onOrgUpdated} onLookupsChanged={loadLookups} showToast={showToast} />}
@@ -1940,7 +1941,7 @@ function TeamAssignmentPanel({ org, lookups, showToast }) {
 // of RCAs" — every preventative action, across every incident, in one
 // place, with overdue ones surfaced instead of buried inside individual
 // tickets nobody reopens to check.
-function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncident }) {
+function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncident, onOpenProblem }) {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState("open");
   const WINDOW_DAYS = 30;
@@ -2067,7 +2068,7 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
                   </button>
                 )}
                 {p.problems && (
-                  <span className="sd-mono" style={{ color: COLORS.blue }}>from Problem {p.problems.display_id}</span>
+                  <button onClick={() => onOpenProblem?.(p.problem_id)} className="sd-mono underline" style={{ color: COLORS.blue }}>from Problem {p.problems.display_id}</button>
                 )}
                 {p.rca_categories?.name && <span>· {p.rca_categories.name}</span>}
                 {p.resolver_groups?.name && <span>· {p.resolver_groups.name}</span>}
@@ -3021,7 +3022,7 @@ function AssigneePanel({ incident, incidents, onChanged, showToast }) {
 // restricted to only-after-resolution — both real ServiceNow limitations
 // found in research. Any staff member can flag "this looks like a pattern"
 // the moment they suspect it, from an incident in any status.
-function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident }) {
+function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, initialProblemId, onProblemOpened }) {
   const [problems, setProblems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [title, setTitle] = useState("");
@@ -3034,6 +3035,16 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident }) {
     setProblems(data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Jumped here from Preventatives via a "from Problem" reference — open
+  // that specific problem once it's loaded, the same navigation pattern
+  // already used for incident references.
+  useEffect(() => {
+    if (initialProblemId && problems.length > 0) {
+      const match = problems.find((p) => p.id === initialProblemId);
+      if (match) { setSelected(match); onProblemOpened?.(); }
+    }
+  }, [initialProblemId, problems, onProblemOpened]);
 
   useEffect(() => {
     if (!selected) return;
