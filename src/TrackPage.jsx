@@ -19,6 +19,9 @@ export default function TrackPage({ token }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [error, setError] = useState("");
+  const [showReopen, setShowReopen] = useState(false);
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopening, setReopening] = useState(false);
 
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // Same 10MB cap as the staff side — one consistent limit everywhere
 
@@ -44,6 +47,16 @@ export default function TrackPage({ token }) {
     setSending(false);
     if (error) { setError("Couldn't send that — please try again."); return; }
     setReply("");
+    await load();
+  }
+
+  async function reopen() {
+    if (!reopenReason.trim()) return;
+    setReopening(true);
+    const { error } = await supabase.rpc("reopen_incident_via_token", { track_token: token, reason: reopenReason });
+    setReopening(false);
+    if (error) { setError(error.message); return; }
+    setShowReopen(false); setReopenReason("");
     await load();
   }
 
@@ -88,6 +101,18 @@ export default function TrackPage({ token }) {
               <div className="text-xs px-2 py-0.5 rounded-full inline-block" style={{ background: status.resolved_at ? COLORS.teal + "22" : COLORS.amber + "22", color: status.resolved_at ? COLORS.teal : COLORS.amber }}>
                 {status.resolved_at ? "Resolved" : status.status_name || "In progress"}
               </div>
+              {status.can_reopen && !showReopen && (
+                <button onClick={() => setShowReopen(true)} className="block mt-2 text-xs underline" style={{ color: COLORS.amber }}>Still not fixed? Reopen this</button>
+              )}
+              {showReopen && (
+                <div className="mt-2 p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+                  <textarea value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} rows={2} placeholder="What's still wrong? (required)"
+                    className="w-full mb-2 px-2 py-1.5 rounded text-xs" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+                  <button onClick={reopen} disabled={reopening || !reopenReason.trim()} className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>
+                    {reopening ? "Reopening…" : "Reopen"}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
