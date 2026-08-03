@@ -176,6 +176,9 @@ function OnboardingScreen({ onCreated }) {
         <button onClick={create} disabled={loading || !orgName.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{ background: COLORS.amber, color: "#1A1200" }}>
           {loading ? "Setting up…" : "Create workspace"}
         </button>
+        <button onClick={() => supabase.auth.signOut()} className="w-full text-xs mt-3" style={{ color: COLORS.muted }}>
+          Not you, or landed here by mistake? Sign out
+        </button>
         <style>{`.sd-in { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 9px 11px; font-size: 13px; color: ${COLORS.text}; }`}</style>
       </div>
     </Centered>
@@ -212,7 +215,10 @@ function JoinScreen({ inviteCode, onJoined }) {
         {!preview ? (
           <p className="text-sm" style={{ color: COLORS.muted }}>Checking invite…</p>
         ) : !preview.valid ? (
-          <p className="text-sm" style={{ color: COLORS.red }}>This invite link is invalid or has expired. Ask whoever sent it for a new one.</p>
+          <>
+            <p className="text-sm mb-3" style={{ color: COLORS.red }}>This invite link is invalid or has expired. Ask whoever sent it for a new one.</p>
+            <button onClick={() => supabase.auth.signOut()} className="w-full text-xs" style={{ color: COLORS.muted }}>Sign out</button>
+          </>
         ) : (
           <>
             <h1 className="sd-display text-lg font-semibold mb-2" style={{ color: COLORS.text }}>Join {preview.org_name}</h1>
@@ -221,6 +227,7 @@ function JoinScreen({ inviteCode, onJoined }) {
             <button onClick={join} disabled={loading} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{ background: COLORS.amber, color: "#1A1200" }}>
               {loading ? "Joining…" : "Join"}
             </button>
+            <button onClick={() => supabase.auth.signOut()} className="w-full text-xs mt-3" style={{ color: COLORS.muted }}>Not you? Sign out</button>
           </>
         )}
       </div>
