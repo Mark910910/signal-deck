@@ -254,6 +254,7 @@ function MainApp({ org, onOrgUpdated }) {
   const [lookups, setLookups] = useState(null); // resolver_groups, categories, statuses, severities, rca_categories
   const [incidents, setIncidents] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [incidentListInit, setIncidentListInit] = useState(null);
   const [openProblemId, setOpenProblemId] = useState(null);
   const [toast, setToast] = useState(null);
   const [tick, setTick] = useState(0);
@@ -328,8 +329,9 @@ function MainApp({ org, onOrgUpdated }) {
         </nav>
 
         <main className="flex-1 min-w-0">
-          {tab === "deck" && <Deck incidents={incidents} lookups={lookups} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }} />}
-          {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} onSelect={setSelectedId} />}
+          {tab === "deck" && <Deck incidents={incidents} lookups={lookups} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }}
+            onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} />}
+          {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} onSelect={setSelectedId} initFilter={incidentListInit} onInitConsumed={() => setIncidentListInit(null)} />}
           {tab === "incidents" && selected && (
             <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick}
               onBack={() => setSelectedId(null)} onChanged={loadIncidents} showToast={showToast} />
@@ -405,7 +407,7 @@ function Field({ label, children }) {
 }
 
 /* ================================== DECK =================================== */
-function Deck({ incidents, lookups, tick, onOpen }) {
+function Deck({ incidents, lookups, tick, onOpen, onNavigateIncidents }) {
   // Business Impact SLA: surface the highest revenue-risk open incidents
   // first, not just whatever was logged most recently.
   const open = incidents.filter((i) => !i.resolved_at)
@@ -426,9 +428,12 @@ function Deck({ incidents, lookups, tick, onOpen }) {
   return (
     <div>
       <div className="grid grid-cols-3 gap-3 mb-4">
-        <StatCard icon={AlertTriangle} label="Open" value={open.length} color={COLORS.blue} />
-        <StatCard icon={Zap} label="Breached" value={breached.length} color={COLORS.red} />
-        <StatCard icon={CheckCircle2} label="Resolved Today" value={resolvedToday.length} color={COLORS.teal} />
+        <StatCard icon={AlertTriangle} label="Open" value={open.length} color={COLORS.blue}
+          onClick={() => onNavigateIncidents({ filter: "open", quickFilter: null })} />
+        <StatCard icon={Zap} label="Breached" value={breached.length} color={COLORS.red}
+          onClick={() => onNavigateIncidents({ filter: "open", quickFilter: "overdue" })} />
+        <StatCard icon={CheckCircle2} label="Resolved Today" value={resolvedToday.length} color={COLORS.teal}
+          onClick={() => onNavigateIncidents({ filter: "resolved", quickFilter: null })} />
       </div>
       <Panel title="Root cause breakdown" icon={ScanEye}>
         {rcaData.length === 0 ? <p className="text-sm" style={{ color: COLORS.muted }}>No resolved incidents categorised yet.</p> : (
@@ -463,13 +468,14 @@ function Deck({ incidents, lookups, tick, onOpen }) {
     </div>
   );
 }
-function StatCard({ icon: Icon, label, value, color }) {
+function StatCard({ icon: Icon, label, value, color, onClick }) {
+  const Wrapper = onClick ? "button" : "div";
   return (
-    <div className="rounded-xl p-3.5" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+    <Wrapper onClick={onClick} className="rounded-xl p-3.5 text-left w-full" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, cursor: onClick ? "pointer" : "default" }}>
       <Icon size={16} color={color} />
       <div className="sd-display text-2xl font-semibold mt-2">{value}</div>
       <div className="text-[11px]" style={{ color: COLORS.muted }}>{label}</div>
-    </div>
+    </Wrapper>
   );
 }
 
@@ -531,7 +537,7 @@ function evaluateCondition(incident, condition, fieldDefs) {
   return true;
 }
 
-function IncidentList({ incidents, lookups, org, tick, onSelect }) {
+function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onInitConsumed }) {
   const [filter, setFilter] = useState("open");
   const [query, setQuery] = useState("");
   const [range, setRange] = useState("all");
@@ -546,6 +552,17 @@ function IncidentList({ incidents, lookups, org, tick, onSelect }) {
   const [showBuilder, setShowBuilder] = useState(false);
   const [savedViews, setSavedViews] = useState([]);
   const [viewName, setViewName] = useState("");
+
+  // Arrived here from a Deck stat-card click (e.g. "Resolved Today") — this
+  // is the direct fix for resolved incidents having no click-through path
+  // back from the dashboard at all.
+  useEffect(() => {
+    if (initFilter) {
+      setFilter(initFilter.filter);
+      setQuickFilter(initFilter.quickFilter);
+      onInitConsumed?.();
+    }
+  }, [initFilter, onInitConsumed]);
 
   const fieldDefs = useMemo(() => buildFieldDefs(lookups), [lookups]);
 
