@@ -10,8 +10,8 @@ const COLORS = {
 // This page is deliberately the ONLY part of the app an unauthenticated
 // visitor ever sees data from. It never imports anything that could show
 // another organisation's incidents, and it never asks for or stores a name,
-// email, or phone number — it only ever calls the two narrow RPCs the
-// database exposes to the public: portal_categories and submit_via_portal.
+// email, or phone number — it only ever calls the narrow RPCs the database
+// exposes to the public: portal_categories and submit_via_portal.
 export default function PortalPage({ slug }) {
   const [categories, setCategories] = useState([]);
   const [title, setTitle] = useState("");
@@ -19,7 +19,8 @@ export default function PortalPage({ slug }) {
   const [category, setCategory] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [confirmedId, setConfirmedId] = useState(null);
+  const [confirmed, setConfirmed] = useState(null); // { display_id, track_token }
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -38,18 +39,32 @@ export default function PortalPage({ slug }) {
     });
     setSubmitting(false);
     if (error) { setError("Something went wrong submitting this — please try again."); return; }
-    setConfirmedId(data);
+    const row = Array.isArray(data) ? data[0] : data;
+    setConfirmed(row);
   }
 
-  if (confirmedId) {
+  const trackLink = confirmed ? `${window.location.origin}/track/${confirmed.track_token}` : "";
+  function copyLink() {
+    navigator.clipboard?.writeText(trackLink);
+    setCopied(true); setTimeout(() => setCopied(false), 1800);
+  }
+
+  if (confirmed) {
     return (
       <Centered>
         <div className="w-full max-w-sm p-6 rounded-xl text-center" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
           <CheckCircle2 size={32} color={COLORS.teal} className="mx-auto mb-3" />
           <h1 className="text-lg font-semibold mb-2" style={{ color: COLORS.text }}>Thanks — it's logged</h1>
           <p className="text-sm mb-1" style={{ color: COLORS.muted }}>Reference number:</p>
-          <p className="text-base font-mono mb-4" style={{ color: COLORS.amber }}>{confirmedId}</p>
-          <p className="text-xs" style={{ color: COLORS.muted }}>Keep this reference if you need to follow up. The support team has been notified.</p>
+          <p className="text-base font-mono mb-4" style={{ color: COLORS.amber }}>{confirmed.display_id}</p>
+          <div className="p-2.5 rounded-lg mb-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
+            <p className="text-xs mb-2" style={{ color: COLORS.muted }}>Save this link to check for updates or add a message — it's the only way back in, there's no account or password.</p>
+            <div className="flex items-center gap-2">
+              <input readOnly value={trackLink} className="flex-1 px-2 py-1.5 rounded text-xs" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+              <button onClick={copyLink} className="px-2.5 py-1.5 rounded text-xs font-medium" style={{ background: COLORS.amber, color: "#1A1200" }}>{copied ? "Copied" : "Copy"}</button>
+            </div>
+          </div>
+          <p className="text-xs" style={{ color: COLORS.muted }}>The support team has been notified.</p>
         </div>
       </Centered>
     );
