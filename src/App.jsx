@@ -1254,6 +1254,8 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
 
       <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
 
+      <AttachmentsPanel incident={incident} org={org} showToast={showToast} />
+
       <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
 
       <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />
@@ -3626,6 +3628,90 @@ function CITypesPanel({ org, lookups, onLookupsChanged, showToast }) {
         This is a business-facing Service
       </label>
       <button onClick={addType} className="sd-btn-p6">Add type</button>
+    </Panel>
+  );
+}
+
+/* ================================= ATTACHMENTS PANEL ============================== */
+// Real gap found live: neither a resolver nor a requestor could attach a
+// file to an incident at all. Designed against two specific, documented
+// failures: ServiceNow's Service Portal silently fails uploads over 25MB
+// with no error shown at all — every failure here shows a clear reason.
+// Jira ties attachment storage to the same paid capacity as everything
+// else in the account — this uses Supabase's separate free 1GB file
+// storage, so attachments never compete with anything else for space.
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10MB, one consistent limit everywhere
+
+function AttachmentsPanel({ incident, org, showToast }) {
+  const [attachments, setAttachments] = useState([]);
+  const [uploading, setUploading] = useState(false);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("incident_attachments").select("*").eq("incident_id", incident.id).order("created_at", { ascending: false });
+    setAttachments(data || []);
+  }, [incident.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function handleUpload(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      showToast("That file is larger than 10MB — please attach a smaller file.");
+      return;
+    }
+    setUploading(true);
+    const path = `${org.id}/${incident.id}/${Date.now()}-${file.name}`;
+    const { error: uploadError } = await supabase.storage.from("attachments").upload(path, file);
+    if (uploadError) {
+      showToast("Upload failed: " + uploadError.message);
+      setUploading(false);
+      return;
+    }
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from("incident_attachments").insert({
+      org_id: org.id, incident_id: incident.id, storage_path: path, file_name: file.name, file_size: file.size,
+      uploaded_by_type: "staff", uploaded_by_user_id: session?.user?.id || null,
+    });
+    setUploading(false);
+    showToast("Attached");
+    await load();
+  }
+
+  async function getUrl(path) {
+    const { data } = await supabase.storage.from("attachments").createSignedUrl(path, 300);
+    return data?.signedUrl;
+  }
+  async function download(att) {
+    const url = await getUrl(att.storage_path);
+    if (url) window.open(url, "_blank");
+    else showToast("Couldn't open that file — try again");
+  }
+  async function remove(att) {
+    await supabase.storage.from("attachments").remove([att.storage_path]);
+    await supabase.from("incident_attachments").delete().eq("id", att.id);
+    showToast("Removed");
+    await load();
+  }
+
+  return (
+    <Panel title="Attachments" icon={Link2}>
+      <div className="space-y-2 mb-3">
+        {attachments.map((a) => (
+          <div key={a.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <button onClick={() => download(a)} className="truncate underline text-left" style={{ color: COLORS.muted }}>{a.file_name}</button>
+            <div className="flex items-center gap-2 shrink-0 ml-2">
+              <span className="text-[11px]" style={{ color: COLORS.faint }}>{(a.file_size / 1024).toFixed(0)} KB · {a.uploaded_by_type === "customer" ? "customer" : "staff"}</span>
+              <button onClick={() => remove(a)}><Trash2 size={13} color={COLORS.faint} /></button>
+            </div>
+          </div>
+        ))}
+        {attachments.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No attachments yet.</p>}
+      </div>
+      <label className="sd-btn-g inline-block cursor-pointer">
+        {uploading ? "Uploading…" : "Attach a file (up to 10MB)"}
+        <input type="file" onChange={handleUpload} disabled={uploading} className="hidden" />
+      </label>
     </Panel>
   );
 }
