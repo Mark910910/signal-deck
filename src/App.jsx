@@ -1948,7 +1948,7 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
   const load = useCallback(async () => {
     const { data } = await supabase
       .from("preventative_actions")
-      .select("*, incidents(display_id, title), resolver_groups(name), rca_categories(id, name)")
+      .select("*, incidents(display_id, title), resolver_groups(name), rca_categories(id, name), problems(display_id, title)")
       .order("due_date", { ascending: true, nullsFirst: false });
     setItems(data || []);
   }, []);
@@ -2065,6 +2065,9 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
                   <button onClick={() => onOpenIncident(p.incident_id)} className="sd-mono underline" style={{ color: COLORS.muted }}>
                     {p.incidents.display_id}
                   </button>
+                )}
+                {p.problems && (
+                  <span className="sd-mono" style={{ color: COLORS.blue }}>from Problem {p.problems.display_id}</span>
                 )}
                 {p.rca_categories?.name && <span>· {p.rca_categories.name}</span>}
                 {p.resolver_groups?.name && <span>· {p.resolver_groups.name}</span>}
@@ -3024,12 +3027,18 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [rcaCategoryId, setRcaCategoryId] = useState("");
+  const [linkedPreventative, setLinkedPreventative] = useState(null);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("problems").select("*, rca_categories(name), problem_incidents(incident_id, incidents(display_id, title))").order("created_at", { ascending: false });
     setProblems(data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!selected) return;
+    supabase.from("preventative_actions").select("id").eq("problem_id", selected.id).maybeSingle().then(({ data }) => setLinkedPreventative(data));
+  }, [selected]);
 
   async function createProblem() {
     if (!title.trim()) { showToast("Give the problem a title"); return; }
@@ -3059,6 +3068,22 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident }) {
     await load();
   }
 
+  // Visible, not silent: this is a button the person clicks, not something
+  // that happens automatically the moment a status changes. The gap this
+  // closes — resolving a Problem previously had zero connection to
+  // Preventative Action effectiveness tracking, so the fix that resolved a
+  // recurring pattern never got measured the way every other fix does.
+  async function createPreventativeFromProblem(problem) {
+    const { error } = await supabase.from("preventative_actions").insert({
+      org_id: org.id, problem_id: problem.id, rca_category_id: problem.rca_category_id,
+      description: problem.workaround || problem.title,
+      status: "done", closed_at: problem.resolved_at || new Date().toISOString(),
+    });
+    if (error) { showToast(error.message); return; }
+    showToast("Logged as a preventative action — check the Preventatives tab");
+    setLinkedPreventative({ id: "new" });
+  }
+
   const statusColor = { investigating: COLORS.amber, known_error: COLORS.blue, resolved: COLORS.teal, closed: COLORS.faint };
 
   if (selected) {
@@ -3081,6 +3106,15 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident }) {
           <Field label="Workaround — shown on every linked incident while it's being worked, not just after">
             <textarea defaultValue={p.workaround || ""} onBlur={(e) => setWorkaround(p.id, e.target.value)} rows={2} className="sd-in3" placeholder="What can an agent do right now, before this is fully fixed?" />
           </Field>
+          {p.status === "resolved" && !linkedPreventative && (
+            <div className="rounded-lg p-2.5 mt-2" style={{ background: COLORS.teal + "18", border: `1px solid ${COLORS.teal}44` }}>
+              <p className="text-xs mb-2" style={{ color: COLORS.teal }}>This problem is resolved — want to track whether the fix actually reduces recurrence, the same way every other preventative action is measured?</p>
+              <button onClick={() => createPreventativeFromProblem(p)} className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: COLORS.teal, color: "#0A1120" }}>Log as a preventative action</button>
+            </div>
+          )}
+          {linkedPreventative && (
+            <p className="text-[11px] mt-2" style={{ color: COLORS.faint }}>Logged as a preventative action — its effectiveness will show in the Preventatives tab.</p>
+          )}
         </Panel>
         <Panel title="Linked incidents" icon={AlertTriangle}>
           {(p.problem_incidents || []).map((pi) => (
