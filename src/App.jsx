@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   AlertTriangle, Clock, CheckCircle2, Radio, Search, Settings as SettingsIcon,
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
-  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server
+  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server, Truck
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 import { supabase } from "./supabaseClient.js";
@@ -23,6 +23,29 @@ function fmtClock(ms) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return `${sign}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
 }
+// Existing orgs have no template_id (onboarding was never touched by the
+// template system) — default to everything enabled, exactly current
+// behavior, unless explicitly turned off. Template-assigned orgs get the
+// template's defaults, further overridable either way.
+function isModuleEnabled(org, moduleKey) {
+  if (!org) return true;
+  const override = org.module_overrides?.[moduleKey];
+  if (override === true) return true;
+  if (override === false) return false;
+  if (!org.template_id) return true;
+  return (org.business_templates?.enabled_modules || []).includes(moduleKey);
+}
+
+// Org's own terminology choice always wins over the template's default —
+// same layering as effective_terminology() in migration 30, computed
+// client-side so the UI never needs a round trip to see it applied.
+function getTerm(org, key, fallback) {
+  if (!org) return fallback;
+  const templateTerm = org.business_templates?.terminology?.[key];
+  const orgTerm = org.terminology_overrides?.[key];
+  return orgTerm || templateTerm || fallback;
+}
+
 function fmtDuration(ms) {
   if (ms < 0) ms = 0;
   const mins = Math.floor(ms / 60000);
@@ -48,7 +71,7 @@ export default function App({ inviteCode }) {
     setCheckingOrg(true);
     const { data: member } = await supabase.from("org_members").select("org_id, role, resolver_group_id, user_id").maybeSingle();
     if (member) {
-      const { data: orgRow } = await supabase.from("organisations").select("*").eq("id", member.org_id).maybeSingle();
+      const { data: orgRow } = await supabase.from("organisations").select("*, business_templates(key, name, enabled_modules, terminology)").eq("id", member.org_id).maybeSingle();
       setOrg(orgRow ? { ...orgRow, myRole: member.role, myResolverGroupId: member.resolver_group_id, myUserId: member.user_id } : null);
     } else {
       setOrg(null);
@@ -237,16 +260,17 @@ function JoinScreen({ inviteCode, onJoined }) {
 
 /* ================================ MAIN APP ================================= */
 const NAV = [
-  { key: "deck", label: "Deck", icon: Radio },
-  { key: "incidents", label: "Incidents", icon: AlertTriangle },
-  { key: "new", label: "Log Incident", icon: Plus },
-  { key: "problems", label: "Problems", icon: Layers },
-  { key: "assets", label: "Assets", icon: Server },
-  { key: "preventatives", label: "Preventatives", icon: ShieldCheck },
-  { key: "dashboards", label: "Dashboards", icon: BarChart3 },
-  { key: "diagnostics", label: "Diagnostics", icon: Activity },
-  { key: "privacy", label: "Privacy", icon: Shield },
-  { key: "settings", label: "Settings", icon: SettingsIcon },
+  { key: "deck", label: "Deck", icon: Radio, module: null },
+  { key: "incidents", label: "Incidents", icon: AlertTriangle, module: null, termKey: "incidents" },
+  { key: "new", label: "Log Incident", icon: Plus, module: null, termKey: "incident" },
+  { key: "problems", label: "Problems", icon: Layers, module: "problems" },
+  { key: "assets", label: "Assets", icon: Server, module: "cmdb" },
+  { key: "vendors", label: "Vendors", icon: Truck, module: "vendors" },
+  { key: "preventatives", label: "Preventatives", icon: ShieldCheck, module: null },
+  { key: "dashboards", label: "Dashboards", icon: BarChart3, module: null },
+  { key: "diagnostics", label: "Diagnostics", icon: Activity, module: null },
+  { key: "privacy", label: "Privacy", icon: Shield, module: null },
+  { key: "settings", label: "Settings", icon: SettingsIcon, module: null },
 ];
 
 function MainApp({ org, onOrgUpdated }) {
@@ -262,7 +286,7 @@ function MainApp({ org, onOrgUpdated }) {
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
 
   const loadLookups = useCallback(async () => {
-    const [rg, cat, st, sv, rca, cf, sc, cit] = await Promise.all([
+    const [rg, cat, st, sv, rca, cf, sc, cit, slap] = await Promise.all([
       supabase.from("resolver_groups").select("*").order("name"),
       supabase.from("categories").select("*").order("name"),
       supabase.from("statuses").select("*").order("sort_order"),
@@ -271,10 +295,12 @@ function MainApp({ org, onOrgUpdated }) {
       supabase.from("custom_fields").select("*").order("sort_order"),
       supabase.from("service_catalog_items").select("*").eq("active", true).order("name"),
       supabase.from("ci_types").select("*").order("sort_order"),
+      supabase.from("sla_policies").select("*"),
     ]);
     setLookups({
       resolverGroups: rg.data || [], categories: cat.data || [], statuses: st.data || [],
       severities: sv.data || [], rcaCategories: rca.data || [], customFields: cf.data || [], catalogItems: sc.data || [], ciTypes: cit.data || [],
+      slaPolicies: slap.data || [],
     });
   }, []);
 
@@ -316,13 +342,14 @@ function MainApp({ org, onOrgUpdated }) {
 
       <div className="max-w-6xl mx-auto md:flex md:gap-6 px-3 md:px-4 pb-24 md:pb-10 pt-4">
         <nav className="hidden md:flex flex-col gap-1 w-52 shrink-0">
-          {NAV.map((item) => {
+          {NAV.filter((item) => isModuleEnabled(org, item.module)).map((item) => {
             const Icon = item.icon; const active = tab === item.key;
+            const label = item.termKey ? getTerm(org, item.termKey, item.label) : item.label;
             return (
               <button key={item.key} onClick={() => { setTab(item.key); setSelectedId(null); }}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left"
                 style={{ background: active ? COLORS.surfaceHi : "transparent", color: active ? COLORS.amber : COLORS.muted }}>
-                <Icon size={16} /> {item.label}
+                <Icon size={16} /> {label}
               </button>
             );
           })}
@@ -343,6 +370,7 @@ function MainApp({ org, onOrgUpdated }) {
           {tab === "diagnostics" && <Diagnostics org={org} lookups={lookups} />}
           {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} initialProblemId={openProblemId} onProblemOpened={() => setOpenProblemId(null)} />}
           {tab === "assets" && <AssetsView org={org} lookups={lookups} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
+          {tab === "vendors" && <VendorsView org={org} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
           {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onOpenProblem={(id) => { setOpenProblemId(id); setTab("problems"); }} />}
           {tab === "dashboards" && <CustomDashboards org={org} lookups={lookups} incidents={incidents} showToast={showToast} />}
           {tab === "privacy" && <PrivacyCenter org={org} onOrgUpdated={onOrgUpdated} incidents={incidents} showToast={showToast} />}
@@ -351,12 +379,13 @@ function MainApp({ org, onOrgUpdated }) {
       </div>
 
       <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden flex justify-start overflow-x-auto py-1.5 px-1" style={{ background: "rgba(10,17,32,0.97)", borderTop: `1px solid ${COLORS.border}` }}>
-        {NAV.map((item) => {
+        {NAV.filter((item) => isModuleEnabled(org, item.module)).map((item) => {
           const Icon = item.icon; const active = tab === item.key;
+          const label = item.termKey ? getTerm(org, item.termKey, item.label) : item.label;
           return (
             <button key={item.key} onClick={() => { setTab(item.key); setSelectedId(null); }} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 shrink-0">
               <Icon size={18} color={active ? COLORS.amber : COLORS.faint} />
-              <span className="text-[9px] font-medium whitespace-nowrap" style={{ color: active ? COLORS.amber : COLORS.faint }}>{item.label}</span>
+              <span className="text-[9px] font-medium whitespace-nowrap" style={{ color: active ? COLORS.amber : COLORS.faint }}>{label}</span>
             </button>
           );
         })}
@@ -1163,6 +1192,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         </div>
         <p className="text-sm mb-2" style={{ color: COLORS.muted }}>{incident.notes}</p>
         <SLABadge incident={incident} />
+        <div className="mt-1"><FirstResponseBadge incident={incident} lookups={lookups} /></div>
         {!incident.resolved_at && (
           incident.acknowledged_at ? (
             <div className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: COLORS.teal }}>
@@ -1271,7 +1301,11 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
 
       <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
 
+      <TimeSpentPanel incident={incident} lookups={lookups} org={org} showToast={showToast} />
+
       <AttachmentsPanel incident={incident} org={org} showToast={showToast} />
+
+      <VendorLinkPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
 
       <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
 
@@ -1528,6 +1562,14 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
       <ServiceCatalogPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
 
       <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+
+      <SLAPoliciesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+
+      <AutomationTrustPanel org={org} showToast={showToast} />
+
+      <VendorSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+
+      <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
 
       <OnCallPanel org={org} lookups={lookups} showToast={showToast} />
 
@@ -2064,6 +2106,8 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
           </div>
         </div>
       </Panel>
+
+      <CSITrendsPanel org={org} lookups={lookups} />
 
       <div className="flex gap-1.5 mb-3 flex-wrap">
         {["open", "overdue", "done", "effectiveness", "all"].map((f) => (
@@ -2730,6 +2774,25 @@ function CustomFieldsPanel({ org, lookups, onLookupsChanged, showToast }) {
   const [fieldType, setFieldType] = useState("text");
   const [optionsText, setOptionsText] = useState("");
   const [required, setRequired] = useState(false);
+  const [nlRequest, setNlRequest] = useState("");
+  const [proposing, setProposing] = useState(false);
+
+  // Translates a plain-language request into the SAME form fields below —
+  // never inserts anything itself. The human still reviews and clicks Add,
+  // the exact same confirmation step as filling the form in by hand.
+  async function proposeFromText() {
+    if (!nlRequest.trim()) return;
+    setProposing(true);
+    const { data, error } = await supabase.functions.invoke("propose-config", { body: { request_text: nlRequest } });
+    setProposing(false);
+    if (error || !data?.proposal) { showToast("Couldn't work that out — try filling in the form directly"); return; }
+    const p = data.proposal;
+    setLabel(p.label || "");
+    setFieldType(["text", "number", "date", "select", "checkbox"].includes(p.field_type) ? p.field_type : "text");
+    setOptionsText((p.options || []).join(", "));
+    setNlRequest("");
+    showToast("Proposed below — review, then click Add");
+  }
 
   async function addField() {
     if (!label.trim()) { showToast("Give the field a name"); return; }
@@ -2753,6 +2816,11 @@ function CustomFieldsPanel({ org, lookups, onLookupsChanged, showToast }) {
       <p className="text-sm mb-2" style={{ color: COLORS.muted }}>
         Add your own fields to incidents — asset tag, cost centre, client reference, whatever your business needs. No code, no developer.
       </p>
+      <div className="flex gap-2 mb-3">
+        <input value={nlRequest} onChange={(e) => setNlRequest(e.target.value)} placeholder="Or describe it — e.g. 'a dropdown for which supplier this affects'" className="sd-in5 flex-1" />
+        <button onClick={proposeFromText} disabled={proposing} className="sd-btn-g text-xs">{proposing ? "…" : "Propose"}</button>
+      </div>
+
       <div className="text-[11px] mb-3 p-2 rounded-lg" style={{ background: COLORS.red + "18", border: `1px solid ${COLORS.red}44`, color: COLORS.red }}>
         Don't use custom fields to store names, phone numbers, ID numbers, or other personal information — they're visible the same way every other incident field is. Turn on the Identity Module (Privacy tab) for that instead, which has proper consent tracking. Text entered here is automatically screened for common personal-identifier patterns, but that's a safety net, not a substitute for using the right field for the job.
       </div>
@@ -3415,6 +3483,11 @@ function AssetsView({ org, lookups, showToast, onOpenIncident }) {
 
   const isStale = (ci) => new Date(ci.last_reviewed_at).getTime() < Date.now() - 90 * 86400000;
   const filtered = filterType ? items.filter((i) => i.ci_type_id === filterType) : items;
+  const isExpiringSoon = (ci) => {
+    const soon = Date.now() + 30 * 86400000;
+    return (ci.warranty_expiry && new Date(ci.warranty_expiry).getTime() < soon) ||
+           (ci.license_expiry && new Date(ci.license_expiry).getTime() < soon);
+  };
 
   if (selected) {
     return <AssetDetail item={selected} org={org} lookups={lookups} items={items} onBack={() => setSelected(null)} onChanged={load} onOpenIncident={onOpenIncident} showToast={showToast} />;
@@ -3422,10 +3495,11 @@ function AssetsView({ org, lookups, showToast, onOpenIncident }) {
 
   return (
     <div className="pb-6">
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-4 gap-3 mb-4">
         <StatCard icon={Server} label="Total" value={items.length} color={COLORS.blue} />
         <StatCard icon={Clock} label="Needs review" value={items.filter(isStale).length} color={COLORS.amber} />
         <StatCard icon={CheckCircle2} label="Active" value={items.filter((i) => i.status === "active").length} color={COLORS.teal} />
+        <StatCard icon={AlertTriangle} label="Expiring soon" value={items.filter(isExpiringSoon).length} color={COLORS.red} />
       </div>
 
       <Panel title="Add configuration item" icon={Server}>
@@ -3461,7 +3535,10 @@ function AssetsView({ org, lookups, showToast, onOpenIncident }) {
               <button onClick={() => setSelected(ci)} className="w-full text-left">
                 <div className="flex items-center justify-between">
                   <span className="text-sm" style={{ color: COLORS.text }}>{ci.name}</span>
-                  {isStale(ci) && ci.status === "active" && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.amber, background: COLORS.amber + "22" }}>NEEDS REVIEW</span>}
+                  <div className="flex gap-1">
+                    {isExpiringSoon(ci) && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.red, background: COLORS.red + "22" }}>EXPIRING SOON</span>}
+                    {isStale(ci) && ci.status === "active" && <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.amber, background: COLORS.amber + "22" }}>NEEDS REVIEW</span>}
+                  </div>
                 </div>
                 <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{ci.display_id} · {ci.ci_types?.name || "Unclassified"}{ci.resolver_groups?.name ? ` · ${ci.resolver_groups.name}` : ""}</div>
               </button>
@@ -3478,16 +3555,39 @@ function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncid
   const [relatedIncidents, setRelatedIncidents] = useState([]);
   const [relationships, setRelationships] = useState([]);
   const [pickRelated, setPickRelated] = useState("");
+  const [vendors, setVendors] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [lifecycleStatus, setLifecycleStatus] = useState(item.lifecycle_status || "deployed");
+  const [warrantyExpiry, setWarrantyExpiry] = useState(item.warranty_expiry || "");
+  const [licenseExpiry, setLicenseExpiry] = useState(item.license_expiry || "");
+  const [vendorId, setVendorId] = useState(item.purchase_vendor_id || "");
+  const [purchaseId, setPurchaseId] = useState(item.purchase_id || "");
 
   const load = useCallback(async () => {
-    const [ic, rel] = await Promise.all([
+    const [ic, rel, v] = await Promise.all([
       supabase.from("incident_cis").select("incident_id, incidents(display_id, title, resolved_at)").eq("ci_id", item.id),
       supabase.from("ci_relationships").select("*, parent:configuration_items!ci_relationships_parent_ci_id_fkey(name), child:configuration_items!ci_relationships_child_ci_id_fkey(name)").or(`parent_ci_id.eq.${item.id},child_ci_id.eq.${item.id}`),
+      supabase.from("vendors").select("id, name").eq("status", "active").order("name"),
     ]);
     setRelatedIncidents(ic.data || []);
     setRelationships(rel.data || []);
+    setVendors(v.data || []);
   }, [item.id]);
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!vendorId) { setPurchases([]); return; }
+    supabase.from("vendor_purchases").select("id, description, agreed_price").eq("vendor_id", vendorId).then(({ data }) => setPurchases(data || []));
+  }, [vendorId]);
+
+  async function saveLifecycle() {
+    await supabase.from("configuration_items").update({
+      lifecycle_status: lifecycleStatus, warranty_expiry: warrantyExpiry || null, license_expiry: licenseExpiry || null,
+      purchase_vendor_id: vendorId || null, purchase_id: purchaseId || null,
+    }).eq("id", item.id);
+    showToast("Saved");
+    await onChanged();
+  }
 
   async function addRelationship() {
     if (!pickRelated) return;
@@ -3531,6 +3631,37 @@ function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncid
             ))}
           </div>
         )}
+      </Panel>
+
+      <Panel title="Lifecycle & cost" icon={Clock}>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Stage">
+            <select value={lifecycleStatus} onChange={(e) => setLifecycleStatus(e.target.value)} className="sd-in3">
+              <option value="procured">Procured</option>
+              <option value="deployed">Deployed</option>
+              <option value="in_maintenance">In maintenance</option>
+              <option value="disposed">Disposed</option>
+            </select>
+          </Field>
+          <Field label="Warranty expiry"><input type="date" value={warrantyExpiry} onChange={(e) => setWarrantyExpiry(e.target.value)} className="sd-in3" /></Field>
+        </div>
+        <Field label="License expiry (for software)"><input type="date" value={licenseExpiry} onChange={(e) => setLicenseExpiry(e.target.value)} className="sd-in3" /></Field>
+        <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Link to what you actually paid, instead of re-entering the cost — reuses the purchase record from Vendors.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Vendor (optional)">
+            <select value={vendorId} onChange={(e) => { setVendorId(e.target.value); setPurchaseId(""); }} className="sd-in3">
+              <option value="">None</option>
+              {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Purchase record (optional)">
+            <select value={purchaseId} onChange={(e) => setPurchaseId(e.target.value)} className="sd-in3" disabled={!vendorId}>
+              <option value="">None</option>
+              {purchases.map((p) => <option key={p.id} value={p.id}>{p.description}{p.agreed_price ? ` (R${p.agreed_price})` : ""}</option>)}
+            </select>
+          </Field>
+        </div>
+        <button onClick={saveLifecycle} className="sd-btn-g">Save</button>
       </Panel>
 
       <Panel title="Relationships" icon={Link2}>
@@ -3689,7 +3820,7 @@ function AttachmentsPanel({ incident, org, showToast }) {
     }
     const { data: { session } } = await supabase.auth.getSession();
     await supabase.from("incident_attachments").insert({
-      org_id: org.id, incident_id: incident.id, storage_path: path, file_name: file.name, file_size: file.size,
+      org_id: org.id, incident_id: incident.id, storage_path: path, file_name: redactPII(file.name), file_size: file.size,
       uploaded_by_type: "staff", uploaded_by_user_id: session?.user?.id || null,
     });
     setUploading(false);
@@ -3731,6 +3862,661 @@ function AttachmentsPanel({ incident, org, showToast }) {
         {uploading ? "Uploading…" : "Attach a file (up to 10MB)"}
         <input type="file" onChange={handleUpload} disabled={uploading} className="hidden" />
       </label>
+    </Panel>
+  );
+}
+
+/* ================================= TIME SPENT PANEL ============================== */
+// Designed against two documented failure modes: pure manual entry gets
+// forgotten ("tired people trying to remember fragmented work after the
+// fact"), and naive auto-timers are just as unreliable, since agents have
+// multiple tabs open and get pulled into calls. The automatic breakdown
+// below needs no new schema at all — incident_timeline has logged every
+// status change with a timestamp since the very first build. Manual entry
+// only exists for the genuine exception: something that doesn't show up
+// as a status change at all, like a phone call.
+function computeTimeInStatus(incident, statuses) {
+  const entries = [...(incident.incident_timeline || [])]
+    .filter((t) => t.status_id)
+    .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+  if (entries.length === 0) return [];
+
+  const buckets = {};
+  for (let i = 0; i < entries.length; i++) {
+    const start = new Date(entries[i].ts).getTime();
+    const end = i + 1 < entries.length ? new Date(entries[i + 1].ts).getTime() : (incident.resolved_at ? new Date(incident.resolved_at).getTime() : Date.now());
+    const statusName = statuses.find((s) => s.id === entries[i].status_id)?.name || "Unknown";
+    buckets[statusName] = (buckets[statusName] || 0) + Math.max(0, end - start);
+  }
+  return Object.entries(buckets).map(([name, ms]) => ({ name, ms })).sort((a, b) => b.ms - a.ms);
+}
+
+function TimeSpentPanel({ incident, lookups, org, showToast }) {
+  const [manualLogs, setManualLogs] = useState([]);
+  const [minutes, setMinutes] = useState("");
+  const [note, setNote] = useState("");
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("incident_time_logs").select("*").eq("incident_id", incident.id).order("logged_at", { ascending: false });
+    setManualLogs(data || []);
+  }, [incident.id]);
+  useEffect(() => { load(); }, [load]);
+
+  const breakdown = computeTimeInStatus(incident, lookups.statuses);
+  const autoTotal = breakdown.reduce((sum, b) => sum + b.ms, 0);
+  const manualTotal = manualLogs.reduce((sum, l) => sum + l.minutes * 60000, 0);
+
+  async function addManual() {
+    const mins = parseInt(minutes, 10);
+    if (!mins || mins <= 0) { showToast("Enter a number of minutes"); return; }
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from("incident_time_logs").insert({
+      org_id: org.id, incident_id: incident.id, user_id: session?.user?.id || null, minutes: mins, note: redactPII(note),
+    });
+    setMinutes(""); setNote("");
+    showToast("Logged");
+    await load();
+  }
+  async function removeManual(id) {
+    await supabase.from("incident_time_logs").delete().eq("id", id);
+    await load();
+  }
+
+  return (
+    <Panel title="Time spent" icon={Clock}>
+      <p className="text-xs mb-3" style={{ color: COLORS.faint }}>Automatic, from status history — nobody has to remember to start a timer.</p>
+      <div className="space-y-1.5 mb-3">
+        {breakdown.map((b) => (
+          <div key={b.name} className="flex items-center justify-between text-sm">
+            <span style={{ color: COLORS.muted }}>{b.name}</span>
+            <span className="sd-mono" style={{ color: COLORS.text }}>{fmtDuration(b.ms)}</span>
+          </div>
+        ))}
+        {breakdown.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No status history yet.</p>}
+      </div>
+      <div className="flex items-center justify-between text-sm mb-3 pt-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+        <span style={{ color: COLORS.text }}>Total (auto + manual)</span>
+        <span className="sd-mono font-semibold" style={{ color: COLORS.amber }}>{fmtDuration(autoTotal + manualTotal)}</span>
+      </div>
+
+      {manualLogs.length > 0 && (
+        <div className="space-y-1.5 mb-3">
+          {manualLogs.map((l) => (
+            <div key={l.id} className="flex items-center justify-between text-xs p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span style={{ color: COLORS.muted }}>{l.minutes}m{l.note ? ` — ${l.note}` : ""}</span>
+              <button onClick={() => removeManual(l.id)}><Trash2 size={12} color={COLORS.faint} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Log time that doesn't show up as a status change — a call, a site visit.</p>
+      <div className="flex gap-2">
+        <input type="number" value={minutes} onChange={(e) => setMinutes(e.target.value)} placeholder="Minutes" className="sd-in6" style={{ width: 80 }} />
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What was it? (optional)" className="sd-in6 flex-1" />
+        <button onClick={addManual} className="sd-btn-g text-xs">Log</button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ============================ FIRST RESPONSE SLA BADGE ============================ */
+// Stops on either a staff comment or a status change, whichever happens
+// first — no ambiguity between the two, unlike a documented Jira bug
+// where a staff member's own reply can get misclassified as a customer
+// comment and the clock never stops. Policies are matched by plain
+// category/severity, never a scripted condition — most specific match
+// wins (both filters set beats one filter beats no filter).
+function findApplicableSlaPolicy(incident, policies, metricType) {
+  const candidates = policies.filter((p) => p.active && p.metric_type === metricType &&
+    (!p.category_id || p.category_id === incident.category?.id) &&
+    (!p.severity_id || p.severity_id === incident.severity?.id));
+  if (candidates.length === 0) return null;
+  return candidates.sort((a, b) => {
+    const score = (p) => (p.category_id ? 1 : 0) + (p.severity_id ? 1 : 0);
+    return score(b) - score(a);
+  })[0];
+}
+
+function FirstResponseBadge({ incident, lookups }) {
+  const policy = findApplicableSlaPolicy(incident, lookups.slaPolicies || [], "first_response");
+  if (!policy) return null;
+  const deadline = new Date(incident.created_at).getTime() + policy.target_minutes * 60000;
+  const responded = !!incident.first_response_at;
+  const remaining = deadline - Date.now();
+  const breached = responded ? new Date(incident.first_response_at).getTime() > deadline : remaining < 0;
+  let color = COLORS.teal;
+  if (breached) color = COLORS.red;
+  else if (!responded && remaining < policy.target_minutes * 60000 * 0.25) color = COLORS.amber;
+  return (
+    <div className="flex items-center gap-1.5 sd-mono text-[11px]" style={{ color }}>
+      <Send size={12} />
+      First response: {responded ? (breached ? "Late" : "On time") : (breached ? `Overdue ${fmtDuration(-remaining)}` : fmtClock(remaining))}
+    </div>
+  );
+}
+
+/* ============================== SLA POLICIES PANEL (Settings) ============= */
+function SLAPoliciesPanel({ org, lookups, onLookupsChanged, showToast }) {
+  const [name, setName] = useState("");
+  const [metricType, setMetricType] = useState("first_response");
+  const [targetMinutes, setTargetMinutes] = useState(30);
+  const [categoryId, setCategoryId] = useState("");
+  const [severityId, setSeverityId] = useState("");
+
+  async function addPolicy() {
+    if (!name.trim() || !targetMinutes) { showToast("Give it a name and a target time"); return; }
+    await supabase.from("sla_policies").insert({
+      org_id: org.id, name: redactPII(name), metric_type: metricType, target_minutes: +targetMinutes,
+      category_id: categoryId || null, severity_id: severityId || null,
+    });
+    setName(""); setTargetMinutes(30); setCategoryId(""); setSeverityId("");
+    showToast("SLA policy added");
+    await onLookupsChanged();
+  }
+  async function togglePolicy(p) {
+    await supabase.from("sla_policies").update({ active: !p.active }).eq("id", p.id);
+    await onLookupsChanged();
+  }
+  async function removePolicy(id) {
+    await supabase.from("sla_policies").delete().eq("id", id);
+    await onLookupsChanged();
+  }
+
+  return (
+    <Panel title="SLA policies" icon={Clock}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Separate targets for first response and resolution, by category and severity if you need it. Simple dropdowns — no scripted conditions, no calendar to misconfigure. Most specific match wins.
+      </p>
+      <div className="space-y-2 mb-4">
+        {(lookups.slaPolicies || []).map((p) => (
+          <div key={p.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <div>
+              <span style={{ color: COLORS.text }}>{p.name}</span>
+              <div className="text-[11px]" style={{ color: COLORS.faint }}>
+                {p.metric_type === "first_response" ? "First response" : "Resolution"} · {p.target_minutes}m
+                {p.category_id ? ` · ${lookups.categories.find((c) => c.id === p.category_id)?.name || ""}` : ""}
+                {p.severity_id ? ` · ${lookups.severities.find((s) => s.id === p.severity_id)?.name || ""}` : ""}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => togglePolicy(p)} className="text-xs" style={{ color: p.active ? COLORS.teal : COLORS.faint }}>{p.active ? "Active" : "Paused"}</button>
+              <button onClick={() => removePolicy(p.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+            </div>
+          </div>
+        ))}
+        {(lookups.slaPolicies || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No custom SLA policies yet — incidents still use the default resolution SLA set on each severity.</p>}
+      </div>
+      <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical first response" className="sd-in5" /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Measures">
+          <select value={metricType} onChange={(e) => setMetricType(e.target.value)} className="sd-in5">
+            <option value="first_response">Time to first response</option>
+            <option value="resolution">Time to resolution</option>
+          </select>
+        </Field>
+        <Field label="Target (minutes)"><input type="number" value={targetMinutes} onChange={(e) => setTargetMinutes(e.target.value)} className="sd-in5" /></Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Only this category (optional)">
+          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="sd-in5">
+            <option value="">Any category</option>
+            {lookups.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Only this severity (optional)">
+          <select value={severityId} onChange={(e) => setSeverityId(e.target.value)} className="sd-in5">
+            <option value="">Any severity</option>
+            {lookups.severities.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </Field>
+      </div>
+      <button onClick={addPolicy} className="sd-btn-p6">Add SLA policy</button>
+    </Panel>
+  );
+}
+
+/* ================================= VENDORS VIEW ============================== */
+// Designed against the most-repeated documented pain point: "purchase
+// expectations were never documented clearly before delivery." Purchases
+// are recorded with agreed terms and price up front, not reconstructed
+// after a dispute. Vendor issues link to the existing incident engine —
+// the scorecard is derived from incidents already being tracked, not a
+// separate analytics system.
+function VendorsView({ org, showToast, onOpenIncident }) {
+  const [vendors, setVendors] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("vendors").select("*").order("name");
+    setVendors(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function createVendor() {
+    if (!name.trim()) { showToast("Give the vendor a name"); return; }
+    const displayId = `VEN-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    await supabase.from("vendors").insert({
+      org_id: org.id, display_id: displayId, name: redactPII(name), category: redactPII(category),
+      contact_name: redactPII(contactName), contact_email: redactPII(contactEmail), contact_phone: redactPII(contactPhone),
+    });
+    setName(""); setCategory(""); setContactName(""); setContactEmail(""); setContactPhone("");
+    showToast("Vendor added");
+    await load();
+  }
+
+  if (selected) {
+    return <VendorDetail vendor={selected} org={org} onBack={() => setSelected(null)} onChanged={load} onOpenIncident={onOpenIncident} showToast={showToast} />;
+  }
+
+  return (
+    <div className="pb-6">
+      <Panel title="Add vendor" icon={Truck}>
+        <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Acme Office Supplies" className="sd-in3" /></Field>
+        <Field label="Category (optional)"><input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="e.g. Supplier, Logistics, Service Provider" className="sd-in3" /></Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Contact name"><input value={contactName} onChange={(e) => setContactName(e.target.value)} className="sd-in3" /></Field>
+          <Field label="Contact email"><input value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} className="sd-in3" /></Field>
+        </div>
+        <Field label="Contact phone"><input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} className="sd-in3" /></Field>
+        <button onClick={createVendor} className="sd-btn-g">Add vendor</button>
+      </Panel>
+
+      <Panel title="Vendors" icon={Truck}>
+        <div className="space-y-2">
+          {vendors.map((v) => (
+            <button key={v.id} onClick={() => setSelected(v)} className="w-full text-left p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, opacity: v.status === "inactive" ? 0.55 : 1 }}>
+              <div className="text-sm" style={{ color: COLORS.text }}>{v.name}</div>
+              <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{v.display_id}{v.category ? ` · ${v.category}` : ""}</div>
+            </button>
+          ))}
+          {vendors.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No vendors added yet.</p>}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function VendorDetail({ vendor, org, onBack, onChanged, onOpenIncident, showToast }) {
+  const [purchases, setPurchases] = useState([]);
+  const [linkedIncidents, setLinkedIncidents] = useState([]);
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("");
+  const [terms, setTerms] = useState("");
+  const [expectedDate, setExpectedDate] = useState("");
+
+  const load = useCallback(async () => {
+    const [p, ic] = await Promise.all([
+      supabase.from("vendor_purchases").select("*").eq("vendor_id", vendor.id).order("created_at", { ascending: false }),
+      supabase.from("incident_vendors").select("incident_id, incidents(display_id, title, resolved_at, created_at)").eq("vendor_id", vendor.id),
+    ]);
+    setPurchases(p.data || []);
+    setLinkedIncidents(ic.data || []);
+  }, [vendor.id]);
+  useEffect(() => { load(); }, [load]);
+
+  // The vendor scorecard, for free — derived entirely from incidents
+  // already being tracked, no separate analytics system.
+  const issueCount = linkedIncidents.length;
+  const openIssues = linkedIncidents.filter((l) => !l.incidents?.resolved_at).length;
+
+  async function createPurchase() {
+    if (!description.trim()) { showToast("Describe what's being purchased"); return; }
+    const displayId = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const priceNum = price ? parseFloat(price) : null;
+    const needsApproval = org.vendor_approval_threshold && priceNum && priceNum >= org.vendor_approval_threshold;
+    const { data: { session } } = await supabase.auth.getSession();
+    await supabase.from("vendor_purchases").insert({
+      org_id: org.id, vendor_id: vendor.id, display_id: displayId, description: redactPII(description),
+      agreed_price: priceNum, agreed_terms: redactPII(terms), expected_delivery_date: expectedDate || null,
+      approval_status: needsApproval ? "pending" : "not_required", created_by: session?.user?.id || null,
+    });
+    setDescription(""); setPrice(""); setTerms(""); setExpectedDate("");
+    showToast(needsApproval ? "Recorded — awaiting approval" : "Recorded");
+    await load();
+  }
+
+  async function decide(purchaseId, decision) {
+    const { error } = await supabase.rpc("set_vendor_purchase_approval", { target_purchase_id: purchaseId, decision });
+    if (error) { showToast(error.message); return; }
+    showToast(`Purchase ${decision}`);
+    await load();
+  }
+
+  async function setPurchaseStatus(id, status) {
+    await supabase.from("vendor_purchases").update({ status, actual_delivery_date: status === "delivered" ? new Date().toISOString().slice(0, 10) : null }).eq("id", id);
+    await load();
+  }
+
+  const canApprove = org.myRole === "owner" || org.myRole === "admin";
+
+  return (
+    <div className="pb-6">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to vendors</button>
+      <Panel title={vendor.name} icon={Truck}>
+        <div className="sd-mono text-xs mb-2" style={{ color: COLORS.faint }}>{vendor.display_id}{vendor.category ? ` · ${vendor.category}` : ""}</div>
+        {vendor.contact_name && <p className="text-sm" style={{ color: COLORS.muted }}>{vendor.contact_name}{vendor.contact_email ? ` · ${vendor.contact_email}` : ""}{vendor.contact_phone ? ` · ${vendor.contact_phone}` : ""}</p>}
+        {vendor.contract_terms && <p className="text-sm mt-2" style={{ color: COLORS.text }}>{vendor.contract_terms}</p>}
+      </Panel>
+
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        <StatCard icon={AlertTriangle} label="Issues raised" value={issueCount} color={COLORS.amber} />
+        <StatCard icon={Clock} label="Open issues" value={openIssues} color={COLORS.red} />
+      </div>
+
+      <Panel title="Record a purchase — terms documented before delivery, not after a dispute" icon={Truck}>
+        <Field label="What's being purchased"><input value={description} onChange={(e) => setDescription(e.target.value)} className="sd-in3" /></Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Agreed price (optional)"><input type="number" value={price} onChange={(e) => setPrice(e.target.value)} className="sd-in3" /></Field>
+          <Field label="Expected delivery (optional)"><input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} className="sd-in3" /></Field>
+        </div>
+        <Field label="Agreed terms (optional)"><textarea value={terms} onChange={(e) => setTerms(e.target.value)} rows={2} className="sd-in3" placeholder="Quality, quantity, delivery conditions — whatever was actually agreed" /></Field>
+        <button onClick={createPurchase} className="sd-btn-g">Record purchase</button>
+      </Panel>
+
+      <Panel title="Purchases" icon={Truck}>
+        <div className="space-y-2">
+          {purchases.map((p) => (
+            <div key={p.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <div className="flex items-center justify-between">
+                <span className="text-sm" style={{ color: COLORS.text }}>{p.description}</span>
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase" style={{ color: COLORS.faint }}>{p.status}</span>
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{p.display_id}{p.agreed_price ? ` · R${p.agreed_price}` : ""}{p.expected_delivery_date ? ` · expected ${p.expected_delivery_date}` : ""}</div>
+              {p.approval_status === "pending" && canApprove && (
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => decide(p.id, "approved")} className="text-xs px-2.5 py-1 rounded-lg font-semibold" style={{ background: COLORS.teal, color: "#0A1120" }}>Approve</button>
+                  <button onClick={() => decide(p.id, "rejected")} className="text-xs px-2.5 py-1 rounded-lg font-semibold" style={{ background: COLORS.red, color: "#fff" }}>Reject</button>
+                </div>
+              )}
+              {p.approval_status === "pending" && !canApprove && <p className="text-[11px] mt-1" style={{ color: COLORS.amber }}>Awaiting owner/admin approval</p>}
+              {p.status === "ordered" && p.approval_status !== "pending" && (
+                <button onClick={() => setPurchaseStatus(p.id, "delivered")} className="text-xs mt-2" style={{ color: COLORS.teal }}>Mark delivered</button>
+              )}
+            </div>
+          ))}
+          {purchases.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No purchases recorded yet.</p>}
+        </div>
+      </Panel>
+
+      <Panel title="Related incidents" icon={AlertTriangle}>
+        {linkedIncidents.map((l) => (
+          <button key={l.incident_id} onClick={() => onOpenIncident(l.incident_id)} className="w-full text-left text-sm py-1.5 sd-mono underline" style={{ color: COLORS.muted, borderBottom: `1px solid ${COLORS.border}` }}>
+            {l.incidents?.display_id} — {l.incidents?.title}
+          </button>
+        ))}
+        {linkedIncidents.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No incidents linked to this vendor yet.</p>}
+      </Panel>
+    </div>
+  );
+}
+
+/* ========================= VENDOR LINK PANEL (incident detail) ============== */
+function VendorLinkPanel({ incident, org, onChanged, showToast }) {
+  const [allVendors, setAllVendors] = useState([]);
+  const [linked, setLinked] = useState([]);
+  const [pickId, setPickId] = useState("");
+
+  const load = useCallback(async () => {
+    const [all, lk] = await Promise.all([
+      supabase.from("vendors").select("id, name").eq("status", "active").order("name"),
+      supabase.from("incident_vendors").select("vendor_id, vendors(name, display_id)").eq("incident_id", incident.id),
+    ]);
+    setAllVendors(all.data || []);
+    setLinked(lk.data || []);
+  }, [incident.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function link() {
+    if (!pickId) return;
+    await supabase.from("incident_vendors").insert({ incident_id: incident.id, vendor_id: pickId, org_id: org.id });
+    setPickId("");
+    showToast("Linked");
+    await load(); await onChanged();
+  }
+  async function unlink(vendorId) {
+    await supabase.from("incident_vendors").delete().eq("incident_id", incident.id).eq("vendor_id", vendorId);
+    await load(); await onChanged();
+  }
+
+  if (allVendors.length === 0 && linked.length === 0) return null;
+
+  return (
+    <Panel title="Related vendor" icon={Truck}>
+      {linked.map((l) => (
+        <div key={l.vendor_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+          <span style={{ color: COLORS.text }}>{l.vendors?.name}</span>
+          <button onClick={() => unlink(l.vendor_id)}><X size={13} color={COLORS.faint} /></button>
+        </div>
+      ))}
+      <div className="flex gap-2 mt-2">
+        <select value={pickId} onChange={(e) => setPickId(e.target.value)} className="sd-in3 flex-1">
+          <option value="">Is this about a vendor?</option>
+          {allVendors.filter((v) => !linked.some((l) => l.vendor_id === v.id)).map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+        </select>
+        <button onClick={link} disabled={!pickId} className="sd-btn-g">Link</button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ============================== VENDOR SETTINGS PANEL (Settings) ============= */
+function VendorSettingsPanel({ org, onOrgUpdated, showToast }) {
+  const [threshold, setThreshold] = useState(org.vendor_approval_threshold || "");
+
+  async function save() {
+    await supabase.from("organisations").update({ vendor_approval_threshold: threshold ? parseFloat(threshold) : null }).eq("id", org.id);
+    showToast("Saved");
+    await onOrgUpdated();
+  }
+
+  return (
+    <Panel title="Vendor purchase approval" icon={Truck}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Purchases at or above this amount need owner/admin approval before proceeding. One simple threshold, not a multi-level approval chain — leave blank to never require approval.
+      </p>
+      <div className="flex gap-2">
+        <input type="number" value={threshold} onChange={(e) => setThreshold(e.target.value)} placeholder="e.g. 5000" className="sd-in3 flex-1" />
+        <button onClick={save} className="sd-btn-g">Save</button>
+      </div>
+    </Panel>
+  );
+}
+
+/* ============================== TEMPLATE SETTINGS PANEL (Settings) ============= */
+// Completes the Business Templates design — this is where an org actually
+// touches what was, until now, correct data sitting unused. Module
+// toggles and terminology both layer over the template's defaults,
+// org's own choice always wins, matching effective_terminology() and
+// isModuleEnabled() exactly.
+const ALL_MODULES = [
+  { key: "problems", label: "Problems" },
+  { key: "cmdb", label: "Assets (CMDB)" },
+  { key: "on_call", label: "On-call & escalation" },
+  { key: "service_catalog", label: "Service catalog" },
+  { key: "sla_policies", label: "Custom SLA policies" },
+  { key: "vendors", label: "Vendors" },
+];
+const TERM_KEYS = [
+  { key: "incident", label: "\"Incident\" (singular)" },
+  { key: "incidents", label: "\"Incidents\" (plural)" },
+  { key: "resolver_group", label: "\"Resolver group\" (singular)" },
+  { key: "resolver_groups", label: "\"Resolver groups\" (plural)" },
+];
+
+function TemplateSettingsPanel({ org, onOrgUpdated, showToast }) {
+  const [moduleOverrides, setModuleOverrides] = useState(org.module_overrides || {});
+  const [termOverrides, setTermOverrides] = useState(org.terminology_overrides || {});
+
+  function toggleModule(key) {
+    const current = isModuleEnabled(org, key);
+    setModuleOverrides((prev) => ({ ...prev, [key]: !current }));
+  }
+
+  async function save() {
+    const redactedTerms = Object.fromEntries(Object.entries(termOverrides).map(([k, v]) => [k, redactPII(v)]));
+    await supabase.from("organisations").update({ module_overrides: moduleOverrides, terminology_overrides: redactedTerms }).eq("id", org.id);
+    showToast("Saved");
+    await onOrgUpdated();
+  }
+
+  return (
+    <Panel title="Template & modules" icon={Layers}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Current template: <strong style={{ color: COLORS.text }}>{org.business_templates?.name || "None — everything enabled by default"}</strong>. Turn individual modules on or off, or rename things to match how your team actually talks — your own choices always win over the template's defaults.
+      </p>
+
+      <div className="text-xs font-semibold mb-2" style={{ color: COLORS.faint }}>MODULES</div>
+      <div className="space-y-1.5 mb-4">
+        {ALL_MODULES.map((m) => {
+          const enabled = moduleOverrides[m.key] !== undefined ? moduleOverrides[m.key] : isModuleEnabled(org, m.key);
+          return (
+            <label key={m.key} className="flex items-center justify-between text-sm p-2 rounded-lg cursor-pointer" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span style={{ color: COLORS.text }}>{m.label}</span>
+              <input type="checkbox" checked={enabled} onChange={() => toggleModule(m.key)} />
+            </label>
+          );
+        })}
+      </div>
+
+      <div className="text-xs font-semibold mb-2" style={{ color: COLORS.faint }}>TERMINOLOGY</div>
+      <div className="space-y-2 mb-4">
+        {TERM_KEYS.map((t) => (
+          <Field key={t.key} label={t.label}>
+            <input
+              value={termOverrides[t.key] !== undefined ? termOverrides[t.key] : (org.business_templates?.terminology?.[t.key] || "")}
+              onChange={(e) => setTermOverrides((prev) => ({ ...prev, [t.key]: e.target.value }))}
+              placeholder={t.key.includes("resolver_group") ? "Resolver group" : "Incident"}
+              className="sd-in5"
+            />
+          </Field>
+        ))}
+      </div>
+
+      <button onClick={save} className="sd-btn-p6">Save</button>
+    </Panel>
+  );
+}
+
+/* ============================== AUTOMATION TRUST PANEL (Settings) ============= */
+// Every automation rule that's fired, with its computed trust tier and
+// recent activity — real numbers from automation_trust_tiers, not a
+// vanity claim. Flagging is explicit, human feedback, never inferred.
+function AutomationTrustPanel({ org, showToast }) {
+  const [rows, setRows] = useState([]);
+  const [rules, setRules] = useState({});
+  const [expanded, setExpanded] = useState(null);
+  const [events, setEvents] = useState([]);
+
+  const load = useCallback(async () => {
+    const [t, r] = await Promise.all([
+      supabase.from("automation_trust_tiers").select("*").eq("automation_type", "automation_rule"),
+      supabase.from("automation_rules").select("id, event_type, action_type"),
+    ]);
+    setRows(t.data || []);
+    setRules(Object.fromEntries((r.data || []).map((x) => [x.id, x])));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function loadEvents(automationId) {
+    setExpanded(automationId);
+    const { data } = await supabase.from("automation_events").select("*").eq("automation_id", automationId).order("created_at", { ascending: false }).limit(10);
+    setEvents(data || []);
+  }
+
+  async function flagWrong(eventId) {
+    const { error } = await supabase.rpc("flag_automation_action_incorrect", { event_id: eventId });
+    if (error) { showToast(error.message); return; }
+    showToast("Flagged");
+    await loadEvents(expanded);
+    await load();
+  }
+
+  const tierColor = { new: COLORS.faint, building_trust: COLORS.amber, trusted: COLORS.teal, needs_review: COLORS.red };
+  const tierLabel = { new: "New", building_trust: "Building trust", trusted: "Trusted", needs_review: "Needs review" };
+
+  return (
+    <Panel title="Automation trust" icon={Activity}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Real track record per automation rule, not a claim — flag a specific firing as wrong and the tier updates immediately.
+      </p>
+      <div className="space-y-2">
+        {rows.map((row) => (
+          <div key={row.automation_id}>
+            <button onClick={() => loadEvents(row.automation_id)} className="w-full flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span style={{ color: COLORS.text }}>{rules[row.automation_id]?.event_type || "Rule"} → {rules[row.automation_id]?.action_type}</span>
+              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: tierColor[row.tier], background: tierColor[row.tier] + "22" }}>{tierLabel[row.tier]}</span>
+            </button>
+            {expanded === row.automation_id && (
+              <div className="mt-1 ml-2 space-y-1">
+                {events.map((e) => (
+                  <div key={e.id} className="flex items-center justify-between text-xs px-2 py-1" style={{ color: COLORS.faint }}>
+                    <span>{new Date(e.created_at).toLocaleString()} · {e.outcome.replace(/_/g, " ")}</span>
+                    {e.outcome === "fired_no_objection" && <button onClick={() => flagWrong(e.id)} className="underline" style={{ color: COLORS.red }}>Flag as wrong</button>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+        {rows.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No automation activity recorded yet.</p>}
+      </div>
+    </Panel>
+  );
+}
+
+/* ============================== CSI TRENDS PANEL ============================== */
+// Live synthesis, not a report to generate — computed from incident
+// frequency already being tracked, comparing the last 30 days to the 30
+// before. Scoped honestly: this is the trend engine, the foundation for
+// predictive capacity — not the staffing prediction itself, which needs
+// more statistical care than a live count comparison provides.
+function CSITrendsPanel({ org, lookups }) {
+  const [trends, setTrends] = useState([]);
+
+  useEffect(() => {
+    supabase.from("rca_category_trends").select("*").then(({ data }) => setTrends(data || []));
+  }, []);
+
+  const trendMeta = {
+    improving: { color: COLORS.teal, label: "Improving", icon: TrendingUp },
+    worsening: { color: COLORS.red, label: "Worsening", icon: AlertTriangle },
+    stable: { color: COLORS.muted, label: "Stable", icon: Activity },
+    new_pattern: { color: COLORS.amber, label: "New pattern", icon: Zap },
+    no_data: { color: COLORS.faint, label: "Not enough data", icon: Clock },
+  };
+
+  const withData = trends.filter((t) => t.trend !== "no_data" && (t.recent_count > 0 || t.prior_count > 0));
+
+  return (
+    <Panel title="Continual improvement — is this actually getting better?" icon={TrendingUp}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Last 30 days versus the 30 before, per root cause — computed live from incidents already logged, not a report you have to remember to run.
+      </p>
+      <div className="space-y-1.5">
+        {withData.map((t) => {
+          const name = lookups.rcaCategories.find((r) => r.id === t.rca_category_id)?.name || "Unknown";
+          const meta = trendMeta[t.trend];
+          const Icon = meta.icon;
+          return (
+            <div key={t.rca_category_id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span style={{ color: COLORS.text }}>{name}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px]" style={{ color: COLORS.faint }}>{t.prior_count} → {t.recent_count}</span>
+                <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: meta.color, background: meta.color + "22" }}>
+                  <Icon size={10} /> {meta.label}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+        {withData.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>Not enough incident history yet to compute trends.</p>}
+      </div>
     </Panel>
   );
 }
