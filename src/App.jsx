@@ -4354,7 +4354,7 @@ function TemplateSettingsPanel({ org, onOrgUpdated, showToast }) {
   const [termOverrides, setTermOverrides] = useState(org.terminology_overrides || {});
 
   function toggleModule(key) {
-    const current = isModuleEnabled(org, key);
+    const current = moduleOverrides[key] !== undefined ? moduleOverrides[key] : isModuleEnabled(org, key);
     setModuleOverrides((prev) => ({ ...prev, [key]: !current }));
   }
 
