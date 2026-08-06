@@ -4310,9 +4310,10 @@ function VendorSettingsPanel({ org, onOrgUpdated, showToast }) {
   const [threshold, setThreshold] = useState(org.vendor_approval_threshold || "");
 
   async function save() {
-    await supabase.from("organisations").update({ vendor_approval_threshold: threshold ? parseFloat(threshold) : null }).eq("id", org.id);
+    const newThreshold = threshold ? parseFloat(threshold) : null;
+    await supabase.from("organisations").update({ vendor_approval_threshold: newThreshold }).eq("id", org.id);
     showToast("Saved");
-    await onOrgUpdated();
+    await onOrgUpdated({ ...org, vendor_approval_threshold: newThreshold });
   }
 
   return (
@@ -4362,7 +4363,7 @@ function TemplateSettingsPanel({ org, onOrgUpdated, showToast }) {
     const redactedTerms = Object.fromEntries(Object.entries(termOverrides).map(([k, v]) => [k, redactPII(v)]));
     await supabase.from("organisations").update({ module_overrides: moduleOverrides, terminology_overrides: redactedTerms }).eq("id", org.id);
     showToast("Saved");
-    await onOrgUpdated();
+    await onOrgUpdated({ ...org, module_overrides: moduleOverrides, terminology_overrides: redactedTerms });
   }
 
   return (
