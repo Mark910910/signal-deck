@@ -29,6 +29,14 @@ function fmtClock(ms) {
 // template's defaults, further overridable either way.
 function isModuleEnabled(org, moduleKey) {
   if (!org) return true;
+  // null means "no gating applies at all" (Deck, Incidents, Log Incident,
+  // Preventatives, Dashboards, Diagnostics, Privacy, Settings) — this has
+  // to be checked before anything else, or it falls through to asking
+  // whether the literal value null appears in a template's module list,
+  // which it never does, hiding every core screen for any org with a
+  // template assigned. Found live: the vendor template hid Log Incident
+  // entirely, since that's exactly this bug.
+  if (moduleKey === null) return true;
   const override = org.module_overrides?.[moduleKey];
   if (override === true) return true;
   if (override === false) return false;
