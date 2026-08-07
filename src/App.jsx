@@ -925,6 +925,19 @@ function IncidentForm({ lookups, org, onCreated }) {
   const [customValues, setCustomValues] = useState({});
   const [recordType, setRecordType] = useState("incident");
   const [catalogItemId, setCatalogItemId] = useState("");
+  const [vendors, setVendors] = useState([]);
+  const [vendorId, setVendorId] = useState("");
+
+  // Only fetched/shown for orgs that actually use Vendors — no point
+  // cluttering the form for anyone who doesn't. This is the direct fix
+  // for a real gap found live: there was no way to pick a vendor when
+  // creating an incident at all, only afterward via a separate panel on
+  // the detail page — a genuinely awkward two-step process for a business
+  // whose primary workflow IS vendor issues (the Vendor template).
+  useEffect(() => {
+    if (!isModuleEnabled(org, "vendors")) return;
+    supabase.from("vendors").select("id, name").eq("status", "active").order("name").then(({ data }) => setVendors(data || []));
+  }, [org]);
 
   const hasContact = customerName.trim() || customerContact.trim();
 
@@ -969,11 +982,14 @@ function IncidentForm({ lookups, org, onCreated }) {
     const sev = lookups.severities.find((s) => s.id === severityId);
     try {
       const catalogItem = (lookups.catalogItems || []).find((c) => c.id === catalogItemId);
-      await insertIncident({
+      const inc = await insertIncident({
         title, notes, categoryId, severityId, slaMinutes: sev.sla_minutes, resolverGroupIds, org,
         identity: { customerName, customerContact, consent }, customValues,
         recordType, requiresApproval: recordType === "service_request" && catalogItem?.requires_approval,
       });
+      if (vendorId) {
+        await supabase.from("incident_vendors").insert({ incident_id: inc.id, vendor_id: vendorId, org_id: org.id });
+      }
       await onCreated();
     } finally { setSaving(false); }
   }
@@ -988,6 +1004,14 @@ function IncidentForm({ lookups, org, onCreated }) {
           </button>
         ))}
       </div>
+      {vendors.length > 0 && (
+        <Field label="Related vendor (optional)">
+          <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="sd-in">
+            <option value="">None</option>
+            {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+          </select>
+        </Field>
+      )}
       {recordType === "service_request" && (lookups.catalogItems || []).length > 0 && (
         <Field label="From the catalog (optional)">
           <select value={catalogItemId} onChange={(e) => applyCatalogItem(e.target.value)} className="sd-in">
