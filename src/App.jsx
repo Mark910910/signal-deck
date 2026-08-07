@@ -1315,6 +1315,8 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
       )}
 
+      <RiskSignalsPanel incident={incident} />
+
       <CommentsPanel incident={incident} org={org} onChanged={onChanged} />
 
       <Panel title="Timeline" icon={Clock}>
@@ -3029,7 +3031,9 @@ function CommentsPanel({ incident, org, onChanged }) {
       <div className="space-y-2 mb-3 max-h-56 overflow-y-auto">
         {filtered.map((c) => (
           <div key={c.id} className="text-xs p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
-            <div className="mb-1" style={{ color: COLORS.faint }}>{c.author_type === "customer" ? "Customer" : "Staff"} · {new Date(c.created_at).toLocaleString()}</div>
+            <div className="mb-1" style={{ color: c.author_type === "system" ? COLORS.blue : COLORS.faint }}>
+              {c.author_type === "customer" ? "Customer" : c.author_type === "system" ? "⚙ System (dependency check)" : "Staff"} · {new Date(c.created_at).toLocaleString()}
+            </div>
             <div style={{ color: COLORS.text }}>{c.body}</div>
           </div>
         ))}
@@ -4518,6 +4522,81 @@ function CSITrendsPanel({ org, lookups }) {
         })}
         {withData.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>Not enough incident history yet to compute trends.</p>}
       </div>
+    </Panel>
+  );
+}
+
+/* ============================== RISK SIGNALS PANEL ============================== */
+// The safe version of "dynamic SLA thresholds" — deliberately does NOT
+// move the actual SLA number. Real research showed the credible version
+// of this pattern adjusts priority/attention within a fixed, transparent
+// SLA, never the number itself silently — an SLA is often a genuine
+// commitment, and a moved target undermines exactly the trust the
+// Automation Trust work exists to build. This surfaces signals for a
+// human to weigh; nothing here ever escalates, reclassifies, or changes
+// anything on its own.
+//
+// Reopen count and reply frequency are fully deterministic — counted
+// from data already loaded, zero AI, zero cost, always visible. Sentiment
+// is the one genuinely AI-dependent piece, so it stays click-triggered,
+// exactly like the existing "Ask AI" mitigation/RCA buttons — never
+// automatic, never silent.
+function RiskSignalsPanel({ incident }) {
+  const [comments, setComments] = useState([]);
+  const [sentiment, setSentiment] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+
+  useEffect(() => {
+    supabase.from("incident_comments").select("body, author_type, created_at").eq("incident_id", incident.id)
+      .then(({ data }) => setComments(data || []));
+  }, [incident.id]);
+
+  const reopenCount = (incident.incident_timeline || []).filter((t) => t.note === "Reopened by customer").length;
+  const customerReplies = comments.filter((c) => c.author_type === "customer");
+  const daysOpen = Math.max(1, (Date.now() - new Date(incident.created_at).getTime()) / 86400000);
+  const replyRate = customerReplies.length ? (customerReplies.length / daysOpen).toFixed(1) : 0;
+
+  async function analyzeSentiment() {
+    if (customerReplies.length === 0) return;
+    setAnalyzing(true);
+    const recentText = customerReplies.slice(-3).map((c) => redactPII(c.body)).join("\n---\n");
+    const result = await askAI(
+      "Read these customer messages about a support ticket. Respond with exactly one word: Frustrated, Neutral, or Satisfied.",
+      recentText
+    );
+    setSentiment(result?.trim() || "Unclear");
+    setAnalyzing(false);
+  }
+
+  const sentimentColor = { Frustrated: COLORS.red, Neutral: COLORS.muted, Satisfied: COLORS.teal };
+
+  return (
+    <Panel title="Risk signals — for you to weigh, nothing here changes the SLA automatically" icon={AlertTriangle}>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <div className="p-2.5 rounded-lg text-center" style={{ background: COLORS.surfaceHi, border: `1px solid ${reopenCount > 0 ? COLORS.amber + "55" : COLORS.border}` }}>
+          <div className="sd-display text-xl font-semibold" style={{ color: reopenCount > 0 ? COLORS.amber : COLORS.text }}>{reopenCount}</div>
+          <div className="text-[11px]" style={{ color: COLORS.muted }}>Times reopened</div>
+        </div>
+        <div className="p-2.5 rounded-lg text-center" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+          <div className="sd-display text-xl font-semibold" style={{ color: COLORS.text }}>{replyRate}/day</div>
+          <div className="text-[11px]" style={{ color: COLORS.muted }}>Customer reply rate</div>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+        <div>
+          <div className="text-[11px]" style={{ color: COLORS.muted }}>Customer sentiment</div>
+          {sentiment ? (
+            <div className="text-sm font-semibold" style={{ color: sentimentColor[sentiment] || COLORS.text }}>{sentiment}</div>
+          ) : (
+            <div className="text-xs" style={{ color: COLORS.faint }}>Not analyzed yet</div>
+          )}
+        </div>
+        <button onClick={analyzeSentiment} disabled={analyzing || customerReplies.length === 0} className="sd-btn-g text-xs">
+          {analyzing ? "Reading…" : "Analyze"}
+        </button>
+      </div>
+      {customerReplies.length === 0 && <p className="text-[11px] mt-1.5" style={{ color: COLORS.faint }}>No customer replies yet to analyze.</p>}
     </Panel>
   );
 }
