@@ -174,11 +174,21 @@ function OnboardingScreen({ onCreated }) {
   const [language, setLanguage] = useState("en");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [templates, setTemplates] = useState([]);
+  const [templateKey, setTemplateKey] = useState("it_full");
+
+  // If this fetch fails for any reason, templateKey simply stays at its
+  // default "it_full" — onboarding is never blocked by this, and the RPC
+  // itself has the same fallback built in as a second safety net.
+  useEffect(() => {
+    supabase.from("business_templates").select("key, name, description").order("sort_order")
+      .then(({ data }) => { if (data?.length) setTemplates(data); });
+  }, []);
 
   async function create() {
     if (!orgName.trim()) return;
     setLoading(true); setError("");
-    const { error } = await supabase.rpc("create_organisation_and_owner", { org_name: orgName, org_language: language });
+    const { error } = await supabase.rpc("create_organisation_and_owner", { org_name: orgName, org_language: language, template_key: templateKey });
     if (error) setError(error.message);
     else await onCreated();
     setLoading(false);
@@ -195,6 +205,21 @@ function OnboardingScreen({ onCreated }) {
           <option value="zu">isiZulu</option>
           <option value="af">Afrikaans</option>
         </select>
+        {templates.length > 0 && (
+          <div className="mb-3">
+            <label className="text-[11px] font-medium block mb-1.5" style={{ color: COLORS.muted }}>What kind of team is this for?</label>
+            <div className="space-y-1.5">
+              {templates.map((t) => (
+                <button key={t.key} type="button" onClick={() => setTemplateKey(t.key)}
+                  className="w-full text-left p-2 rounded-lg text-xs"
+                  style={{ background: templateKey === t.key ? COLORS.amber + "18" : COLORS.surfaceHi, border: `1px solid ${templateKey === t.key ? COLORS.amber + "66" : COLORS.border}` }}>
+                  <div style={{ color: templateKey === t.key ? COLORS.amber : COLORS.text, fontWeight: 500 }}>{t.name}</div>
+                  {t.description && <div className="mt-0.5" style={{ color: COLORS.faint }}>{t.description}</div>}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {error && <p className="text-xs mb-2" style={{ color: COLORS.red }}>{error}</p>}
         <button onClick={create} disabled={loading || !orgName.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm" style={{ background: COLORS.amber, color: "#1A1200" }}>
           {loading ? "Setting up…" : "Create workspace"}
