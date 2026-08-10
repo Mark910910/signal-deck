@@ -1277,25 +1277,37 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{incident.display_id}</span>
           <SeverityPill name={incident.severity?.name} /><StatusPill name={incident.status?.name} />
         </div>
-        <p className="text-sm mb-2" style={{ color: COLORS.muted }}>{incident.notes}</p>
-        <SLABadge incident={incident} />
-        <div className="mt-1"><FirstResponseBadge incident={incident} lookups={lookups} /></div>
-        {!incident.resolved_at && (
-          incident.acknowledged_at ? (
-            <div className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: COLORS.teal }}>
-              <Check size={13} /> Acknowledged {new Date(incident.acknowledged_at).toLocaleString()}
-            </div>
-          ) : (
-            <button onClick={acknowledge} className="mt-3 w-full py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.teal + "1c", color: COLORS.teal, border: `1px solid ${COLORS.teal}55` }}>
-              Acknowledge
-            </button>
-          )
+        <p className="text-sm" style={{ color: COLORS.muted }}>{incident.notes}</p>
+
+        {/* SLA status — its own visually separated block, not stacked
+            directly under the description with no breathing room. */}
+        <div className="mt-3 pt-3 flex flex-col gap-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+          <SLABadge incident={incident} />
+          <FirstResponseBadge incident={incident} lookups={lookups} />
+        </div>
+
+        {/* Actions — Acknowledge and War Room grouped together as their
+            own block, separated from the SLA info above rather than
+            just tacked on directly after it. */}
+        {(!incident.resolved_at) && (
+          <div className="mt-3 pt-3 space-y-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            {incident.acknowledged_at ? (
+              <div className="flex items-center gap-1.5 text-xs" style={{ color: COLORS.teal }}>
+                <Check size={13} /> Acknowledged {new Date(incident.acknowledged_at).toLocaleString()}
+              </div>
+            ) : (
+              <button onClick={acknowledge} className="w-full py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.teal + "1c", color: COLORS.teal, border: `1px solid ${COLORS.teal}55` }}>
+                Acknowledge
+              </button>
+            )}
+            {incident.severity?.name === "Critical" && (
+              <button onClick={warRoom} className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.red + "1c", color: COLORS.red, border: `1px solid ${COLORS.red}55` }}>
+                <Zap size={14} /> Open War Room
+              </button>
+            )}
+          </div>
         )}
-        {incident.severity?.name === "Critical" && !incident.resolved_at && (
-          <button onClick={warRoom} className="mt-3 w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.red + "1c", color: COLORS.red, border: `1px solid ${COLORS.red}55` }}>
-            <Zap size={14} /> Open War Room
-          </button>
-        )}
+
         {!incident.resolved_at && <CommandSummaryPanel incident={incident} incidents={incidents} lookups={lookups} />}
       </Panel>
 
@@ -1383,7 +1395,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
             </Panel>
           </CollapsibleSection>
 
-          <CollapsibleSection title="Files & approval" icon={Clock} defaultOpen={false}
+          <CollapsibleSection title="Files & approval" icon={CheckCircle2} defaultOpen={false}
             forceOpen={incident.record_type === "service_request" && incident.approval_status === "pending"}>
             {incident.record_type === "service_request" && incident.approval_status === "pending" && (
               <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
@@ -1412,7 +1424,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         </div>
 
         <div className="md:w-72 md:shrink-0">
-          <Panel title="Status" icon={Clock}>
+          <Panel title="Status" icon={Activity}>
             <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
               {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
