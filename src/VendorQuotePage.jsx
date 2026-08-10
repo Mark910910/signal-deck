@@ -1,0 +1,88 @@
+import React, { useState, useEffect, useCallback } from "react";
+import { Anchor, Check } from "lucide-react";
+import { supabase } from "./supabaseClient.js";
+
+const COLORS = {
+  bg: "#0A1120", surface: "#121B2E", surfaceHi: "#182338", border: "#232F47",
+  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", text: "#E8ECF3", muted: "#8B96AB", faint: "#5B6580",
+};
+
+// Same no-login pattern as VendorTrackPage — the exact thing the SME-
+// focused competitor found in research is most praised for: a link, no
+// account, submit a price, done.
+export default function VendorQuotePage({ token }) {
+  const [request, setRequest] = useState(null);
+  const [price, setPrice] = useState("");
+  const [notes, setNotes] = useState("");
+  const [validUntil, setValidUntil] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.rpc("get_quote_request_for_vendor", { track_token: token });
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) { setError("This link doesn't look right — please check it with whoever sent it."); return; }
+    setRequest(row);
+    if (row.submitted_at) { setSubmitted(true); setPrice(row.quoted_price || ""); setNotes(row.notes || ""); setValidUntil(row.valid_until || ""); }
+  }, [token]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function submit() {
+    if (!price) return;
+    setSending(true);
+    const { error } = await supabase.rpc("submit_quote_response", { track_token: token, price: parseFloat(price), quote_notes: notes, expires: validUntil || null });
+    setSending(false);
+    if (error) { setError("Couldn't submit that — please try again."); return; }
+    setSubmitted(true);
+  }
+
+  return (
+    <div style={{ background: COLORS.bg, minHeight: "100vh" }} className="flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center gap-2 mb-5 justify-center">
+          <Anchor size={18} color={COLORS.amber} />
+          <span style={{ color: COLORS.text, fontWeight: 600 }}>Signal Deck</span>
+        </div>
+
+        <div className="rounded-xl p-5" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          {error && <p className="text-sm" style={{ color: COLORS.red }}>{error}</p>}
+
+          {request && (
+            <>
+              <div className="mb-4">
+                <div className="text-xs mb-1" style={{ color: COLORS.faint }}>{request.display_id}</div>
+                <div className="text-sm mb-1" style={{ color: COLORS.text }}>We'd like a quote for:</div>
+                <p className="text-sm" style={{ color: COLORS.muted }}>{request.description}</p>
+              </div>
+
+              {submitted ? (
+                <div className="rounded-lg p-3 text-center" style={{ background: COLORS.teal + "18", border: `1px solid ${COLORS.teal}44` }}>
+                  <Check size={20} color={COLORS.teal} className="mx-auto mb-1" />
+                  <p className="text-sm" style={{ color: COLORS.teal }}>Quote submitted — thank you.</p>
+                  <p className="text-xs mt-1" style={{ color: COLORS.muted }}>You quoted R{price}{validUntil ? `, valid until ${validUntil}` : ""}.</p>
+                </div>
+              ) : (
+                <>
+                  <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Your price</label>
+                  <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00"
+                    className="w-full mb-2 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+                  <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Valid until (optional)</label>
+                  <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)}
+                    className="w-full mb-2 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+                  <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Notes (optional)</label>
+                  <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+                    className="w-full mb-3 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+                  <button onClick={submit} disabled={sending || !price} className="w-full py-2 rounded-lg text-sm font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>
+                    {sending ? "Submitting…" : "Submit quote"}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
