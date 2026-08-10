@@ -1268,6 +1268,10 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         )}
       </Panel>
 
+      {!incident.resolved_at && (
+        <CommandSummaryPanel incident={incident} incidents={incidents} lookups={lookups} />
+      )}
+
       <Panel title="Status" icon={Clock}>
         <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
           {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -3069,42 +3073,50 @@ function CommentsPanel({ incident, org, onChanged }) {
     await load(); onChanged();
   }
 
-  const filtered = comments.filter((c) => tab === "internal" ? c.visibility === "internal" : c.visibility === "customer");
-  const isCustomer = tab === "customer";
+  const filtered = comments.filter((c) => c.visibility === tab);
+  const tabMeta = {
+    internal: { label: "Internal notes", color: COLORS.amber },
+    customer: { label: "Customer-visible", color: COLORS.teal },
+    vendor: { label: "Vendor-visible", color: COLORS.blue },
+  };
   // Deliberately not just a color on the tab pill — ServiceNow/Jira forum
   // threads show experienced admins getting confused about audience months
   // in, and the most-documented failure ("work note bleed") happens exactly
   // at the point someone types into the wrong box. So the audience is
-  // restated at the compose box itself, not just the tab above it.
-  const accent = isCustomer ? COLORS.teal : COLORS.amber;
+  // restated at the compose box itself, not just the tab above it. The
+  // same discipline extends to the third audience, not relaxed for it.
+  const accent = tabMeta[tab].color;
 
   return (
     <Panel title="Comments" icon={MessageSquare}>
-      <div className="flex gap-1.5 mb-3">
-        <button onClick={() => setTab("internal")} className="px-3 py-1.5 rounded-full text-xs font-medium" style={{ background: tab === "internal" ? COLORS.amber + "22" : COLORS.surface, color: tab === "internal" ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>Internal notes</button>
-        <button onClick={() => setTab("customer")} className="px-3 py-1.5 rounded-full text-xs font-medium" style={{ background: tab === "customer" ? COLORS.teal + "22" : COLORS.surface, color: tab === "customer" ? COLORS.teal : COLORS.muted, border: `1px solid ${COLORS.border}` }}>Customer-visible</button>
+      <div className="flex gap-1.5 mb-3 flex-wrap">
+        {Object.entries(tabMeta).map(([key, meta]) => (
+          <button key={key} onClick={() => setTab(key)} className="px-3 py-1.5 rounded-full text-xs font-medium" style={{ background: tab === key ? meta.color + "22" : COLORS.surface, color: tab === key ? meta.color : COLORS.muted, border: `1px solid ${COLORS.border}` }}>{meta.label}</button>
+        ))}
       </div>
 
       <div className="space-y-2 mb-3 max-h-56 overflow-y-auto">
         {filtered.map((c) => (
           <div key={c.id} className="text-xs p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
             <div className="mb-1" style={{ color: c.author_type === "system" ? COLORS.blue : COLORS.faint }}>
-              {c.author_type === "customer" ? "Customer" : c.author_type === "system" ? "⚙ System (dependency check)" : "Staff"} · {new Date(c.created_at).toLocaleString()}
+              {c.author_type === "customer" ? "Customer" : c.author_type === "vendor" ? "Vendor" : c.author_type === "system" ? "⚙ System (dependency check)" : "Staff"} · {new Date(c.created_at).toLocaleString()}
             </div>
             <div style={{ color: COLORS.text }}>{c.body}</div>
           </div>
         ))}
-        {filtered.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No {tab === "internal" ? "internal notes" : "customer messages"} yet.</p>}
+        {filtered.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No {tabMeta[tab].label.toLowerCase()} yet.</p>}
       </div>
 
       <div className="rounded-lg p-2.5" style={{ background: accent + "0f", border: `1px solid ${accent}55` }}>
         <div className="flex items-center gap-1.5 mb-2 text-[11px] font-medium" style={{ color: accent }}>
-          {isCustomer ? <><Users size={12} /> The customer can see this and reply</> : <><Lock size={12} /> Only your team can see this</>}
+          {tab === "internal" ? <><Lock size={12} /> Only your team can see this</> :
+           tab === "customer" ? <><Users size={12} /> The customer can see this and reply</> :
+           <><Truck size={12} /> The vendor can see this and reply</>}
         </div>
         <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={2} className="sd-in3" style={{ borderColor: accent + "55" }}
-          placeholder={isCustomer ? "Message the customer will see…" : "Note for other staff…"} />
+          placeholder={tab === "internal" ? "Note for other staff…" : tab === "customer" ? "Message the customer will see…" : "Message the vendor will see…"} />
         <button onClick={post} disabled={sending || !draft.trim()} className="mt-2 py-1.5 px-3 rounded-lg text-xs font-semibold" style={{ background: accent, color: "#0A1120" }}>
-          {sending ? "Posting…" : isCustomer ? "Post — customer will see this" : "Post internal note"}
+          {sending ? "Posting…" : tab === "internal" ? "Post internal note" : `Post — ${tab} will see this`}
         </button>
       </div>
     </Panel>
@@ -4199,6 +4211,8 @@ function VendorsView({ org, showToast, onOpenIncident }) {
           {vendors.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No vendors added yet.</p>}
         </div>
       </Panel>
+
+      <QuoteRequestsPanel org={org} vendors={vendors} showToast={showToast} />
     </div>
   );
 }
@@ -4654,6 +4668,204 @@ function RiskSignalsPanel({ incident }) {
         </button>
       </div>
       {customerReplies.length === 0 && <p className="text-[11px] mt-1.5" style={{ color: COLORS.faint }}>No customer replies yet to analyze.</p>}
+    </Panel>
+  );
+}
+
+/* ============================== QUOTE REQUESTS PANEL ============================== */
+// Extends the exact no-login vendor-portal pattern already proven twice
+// tonight to quote comparison specifically — the thing research confirmed
+// SME procurement teams value most, and the exact mechanism the leading
+// SME-focused competitor is praised for. No cap on invited vendors,
+// unlike that competitor's own free tier (capped at three).
+function QuoteRequestsPanel({ org, vendors, showToast }) {
+  const [requests, setRequests] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [description, setDescription] = useState("");
+  const [pickedVendorIds, setPickedVendorIds] = useState([]);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("quote_requests").select("*").order("created_at", { ascending: false });
+    setRequests(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  function toggleVendor(id) {
+    setPickedVendorIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
+
+  async function createRequest() {
+    if (!description.trim()) { showToast("Describe what you need a quote for"); return; }
+    if (pickedVendorIds.length === 0) { showToast("Pick at least one vendor to invite"); return; }
+    const displayId = `RFQ-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data: qr, error } = await supabase.from("quote_requests").insert({
+      org_id: org.id, display_id: displayId, description: redactPII(description), created_by: session?.user?.id || null,
+    }).select().single();
+    if (error) { showToast(error.message); return; }
+    await supabase.from("quote_request_vendors").insert(
+      pickedVendorIds.map((vid) => ({ quote_request_id: qr.id, vendor_id: vid, org_id: org.id }))
+    );
+    setDescription(""); setPickedVendorIds([]);
+    showToast("Sent — each vendor will get an email with a link to quote");
+    await load();
+  }
+
+  return (
+    <>
+      {selected ? (
+        <QuoteRequestDetail request={selected} org={org} onBack={() => setSelected(null)} onChanged={load} showToast={showToast} />
+      ) : (
+        <>
+          <Panel title="Request quotes" icon={Truck}>
+            <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+              Each vendor gets an emailed link — no account needed, same as vendor issue tracking. Prices come back side by side, no spreadsheet required.
+            </p>
+            <Field label="What do you need a quote for?"><textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="sd-in3" /></Field>
+            <Field label="Invite vendors">
+              <div className="flex flex-wrap gap-1.5">
+                {vendors.map((v) => (
+                  <button key={v.id} type="button" onClick={() => toggleVendor(v.id)} className="text-xs px-2.5 py-1 rounded-full"
+                    style={{ background: pickedVendorIds.includes(v.id) ? COLORS.amber + "22" : COLORS.surfaceHi, color: pickedVendorIds.includes(v.id) ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+                    {v.name}
+                  </button>
+                ))}
+              </div>
+              {vendors.length === 0 && <p className="text-xs mt-1" style={{ color: COLORS.faint }}>Add a vendor first.</p>}
+            </Field>
+            <button onClick={createRequest} className="sd-btn-g">Send quote request</button>
+          </Panel>
+
+          <Panel title="Quote requests" icon={Truck}>
+            <div className="space-y-2">
+              {requests.map((r) => (
+                <button key={r.id} onClick={() => setSelected(r)} className="w-full text-left p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm" style={{ color: COLORS.text }}>{r.description}</span>
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase" style={{ color: r.status === "awarded" ? COLORS.teal : COLORS.amber, background: (r.status === "awarded" ? COLORS.teal : COLORS.amber) + "22" }}>{r.status}</span>
+                  </div>
+                  <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{r.display_id}</div>
+                </button>
+              ))}
+              {requests.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No quote requests yet.</p>}
+            </div>
+          </Panel>
+        </>
+      )}
+    </>
+  );
+}
+
+function QuoteRequestDetail({ request, org, onBack, onChanged, showToast }) {
+  const [responses, setResponses] = useState([]);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("quote_request_vendors").select("*, vendors(name)").eq("quote_request_id", request.id).order("quoted_price", { ascending: true, nullsFirst: false });
+    setResponses(data || []);
+  }, [request.id]);
+  useEffect(() => { load(); }, [load]);
+
+  async function award(vendorId) {
+    await supabase.from("quote_requests").update({ status: "awarded", awarded_vendor_id: vendorId }).eq("id", request.id);
+    // The actual, useful payoff of comparing quotes in one place: the
+    // winning price becomes a real purchase record automatically, no
+    // re-typing the number that was just compared.
+    const won = responses.find((r) => r.vendor_id === vendorId);
+    const displayId = `PO-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    await supabase.from("vendor_purchases").insert({
+      org_id: org.id, vendor_id: vendorId, display_id: displayId, description: request.description,
+      agreed_price: won?.quoted_price || null, expected_delivery_date: won?.valid_until || null,
+    });
+    showToast("Awarded — a purchase record was created automatically");
+    await onChanged();
+    onBack();
+  }
+
+  return (
+    <div>
+      <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to quote requests</button>
+      <Panel title={request.description} icon={Truck}>
+        <div className="sd-mono text-xs mb-3" style={{ color: COLORS.faint }}>{request.display_id}</div>
+        <div className="space-y-2">
+          {responses.map((r) => (
+            <div key={r.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <div className="flex items-center justify-between">
+                <span className="text-sm" style={{ color: COLORS.text }}>{r.vendors?.name}</span>
+                {r.quoted_price != null ? (
+                  <span className="sd-mono text-sm font-semibold" style={{ color: COLORS.amber }}>R{r.quoted_price}</span>
+                ) : (
+                  <span className="text-[11px]" style={{ color: COLORS.faint }}>No response yet</span>
+                )}
+              </div>
+              {r.notes && <p className="text-xs mt-1" style={{ color: COLORS.muted }}>{r.notes}</p>}
+              {r.valid_until && <p className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>Valid until {r.valid_until}</p>}
+              {r.quoted_price != null && request.status !== "awarded" && (
+                <button onClick={() => award(r.vendor_id)} className="text-xs mt-2 px-2.5 py-1 rounded-lg font-semibold" style={{ background: COLORS.teal, color: "#0A1120" }}>Award to this vendor</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+/* ============================== COMMAND SUMMARY PANEL ============================== */
+// The real, buildable version of "AI Incident Commander" — a human-driven
+// cockpit view, not an autonomous agent. Originally scoped to Critical
+// incidents only; broadened to every active incident, since the
+// underlying information is genuinely useful regardless of severity, not
+// just during a major incident. Every fact shown here is already tracked
+// elsewhere in the app; this just pulls it to the top so nobody has to
+// hunt across five panels. AI assists exactly as it already does
+// everywhere else tonight (click-triggered
+// suggestions, human confirms) — nothing here acts on its own.
+function CommandSummaryPanel({ incident, incidents, lookups }) {
+  const [affectedCount, setAffectedCount] = useState(0);
+
+  useEffect(() => {
+    supabase.from("incident_cis").select("ci_id", { count: "exact", head: true }).eq("incident_id", incident.id)
+      .then(({ count }) => setAffectedCount(count || 0));
+  }, [incident.id]);
+
+  // Deterministic matching, same "prefer determinism" lesson as the
+  // dependency mapper — same category or same root cause, not resolved,
+  // not this incident itself.
+  const related = incidents.filter((i) =>
+    i.id !== incident.id && !i.resolved_at &&
+    ((incident.category?.id && i.category?.id === incident.category.id) ||
+     (incident.rca_category?.id && i.rca_category?.id === incident.rca_category.id))
+  ).slice(0, 5);
+
+  const timeOpen = Date.now() - new Date(incident.created_at).getTime();
+
+  return (
+    <Panel title="At a glance — nothing here acts on its own" icon={Zap}>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="p-2 rounded-lg text-center" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+          <div className="sd-display text-lg font-semibold" style={{ color: COLORS.amber }}>{fmtDuration(timeOpen)}</div>
+          <div className="text-[10px]" style={{ color: COLORS.muted }}>Time open</div>
+        </div>
+        <div className="p-2 rounded-lg text-center" style={{ background: COLORS.surfaceHi, border: `1px solid ${affectedCount > 0 ? COLORS.red + "55" : COLORS.border}` }}>
+          <div className="sd-display text-lg font-semibold" style={{ color: affectedCount > 0 ? COLORS.red : COLORS.text }}>{affectedCount}</div>
+          <div className="text-[10px]" style={{ color: COLORS.muted }}>Affected assets</div>
+        </div>
+        <div className="p-2 rounded-lg text-center" style={{ background: COLORS.surfaceHi, border: `1px solid ${related.length > 0 ? COLORS.amber + "55" : COLORS.border}` }}>
+          <div className="sd-display text-lg font-semibold" style={{ color: related.length > 0 ? COLORS.amber : COLORS.text }}>{related.length}</div>
+          <div className="text-[10px]" style={{ color: COLORS.muted }}>Related open incidents</div>
+        </div>
+      </div>
+
+      {related.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-[11px] font-semibold mb-1" style={{ color: COLORS.faint }}>MIGHT BE THE SAME UNDERLYING ISSUE</div>
+          {related.map((r) => (
+            <div key={r.id} className="text-xs py-1" style={{ color: COLORS.muted }}>
+              <span className="sd-mono" style={{ color: COLORS.faint }}>{r.display_id}</span> — {r.title}
+            </div>
+          ))}
+        </div>
+      )}
     </Panel>
   );
 }
