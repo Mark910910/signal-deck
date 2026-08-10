@@ -1622,11 +1622,11 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
       <CustomFieldsPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
 
-      <ServiceCatalogPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+      {isModuleEnabled(org, "service_catalog") && <ServiceCatalogPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
 
-      <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+      {isModuleEnabled(org, "cmdb") && <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
 
-      <SLAPoliciesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+      {isModuleEnabled(org, "sla_policies") && <SLAPoliciesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
 
       <AutomationTrustPanel org={org} showToast={showToast} />
 
@@ -1634,7 +1634,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
       <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
 
-      <OnCallPanel org={org} lookups={lookups} showToast={showToast} />
+      {isModuleEnabled(org, "on_call") && <OnCallPanel org={org} lookups={lookups} showToast={showToast} />}
 
       <AutomationRulesPanel org={org} lookups={lookups} showToast={showToast} />
 
