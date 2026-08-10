@@ -1299,122 +1299,132 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         {!incident.resolved_at && <CommandSummaryPanel incident={incident} incidents={incidents} lookups={lookups} />}
       </Panel>
 
-      <CollapsibleSection title="Work this incident" icon={ShieldCheck} defaultOpen={true}>
-        <Panel title="Status" icon={Clock}>
-          <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
-            {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </Panel>
+      {/* Two-column on desktop (same md: breakpoint already used for the
+          sidebar vs mobile bottom nav elsewhere in the app), single
+          column on mobile — the side column just renders after the main
+          one in DOM order on mobile, a reasonable fallback rather than
+          a second layout to maintain. Right column holds the things
+          someone glances at or occasionally updates (status, assignee,
+          related assets/vendor/fields, time logged); left column holds
+          the things someone is actively working through. */}
+      <div className="md:flex md:gap-4 md:items-start">
+        <div className="md:flex-1 md:min-w-0">
+          <CollapsibleSection title="Work this incident" icon={ShieldCheck} defaultOpen={true}>
+            <Panel title="AI mitigation suggestion" icon={Sparkles}>
+              <p className="text-sm mb-2 whitespace-pre-wrap">{incident.ai_mitigation || "No suggestion yet."}</p>
+              <button onClick={suggestMitigation} disabled={aiLoading === "mitigation"} className="sd-btn-g">{aiLoading === "mitigation" ? "Thinking…" : "Ask AI"}</button>
+            </Panel>
 
-        <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
-
-        <Panel title="AI mitigation suggestion" icon={Sparkles}>
-          <p className="text-sm mb-2 whitespace-pre-wrap">{incident.ai_mitigation || "No suggestion yet."}</p>
-          <button onClick={suggestMitigation} disabled={aiLoading === "mitigation"} className="sd-btn-g">{aiLoading === "mitigation" ? "Thinking…" : "Ask AI"}</button>
-        </Panel>
-
-        {!incident.resolved_at && (
-          <Panel title="Resolve" icon={CheckCircle2}>
-            <Field label="Root cause category">
-              <select value={rcaCategoryId} onChange={(e) => setRcaCategoryId(e.target.value)} className="sd-in3">
-                <option value="">Choose…</option>
-                {lookups.rcaCategories.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-            </Field>
-            <button onClick={suggestRCA} disabled={aiLoading === "rca"} className="sd-btn-g mb-3">{aiLoading === "rca" ? "Thinking…" : "AI: suggest category"}</button>
-            <Field label="Resolution classification">
-              <select value={resolutionClass} onChange={(e) => setResolutionClass(e.target.value)} className="sd-in3">
-                <option value="">Choose…</option>
-                <option>Permanent Fix</option><option>Temporary Fix</option><option>Workaround</option><option>Escalated (No Fix)</option>
-              </select>
-            </Field>
-            <button onClick={resolve} className="sd-btn-p">Resolve Incident</button>
-          </Panel>
-        )}
-
-        <Panel title="Preventative actions — what stops this recurring" icon={ShieldCheck}>
-          <div className="space-y-2 mb-4">
-            {preventatives.map((p) => (
-              <div key={p.id} className="text-sm p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, opacity: p.status === "done" || p.status === "wont_fix" ? 0.55 : 1 }}>
-                <div className="flex items-center justify-between gap-2">
-                  <span style={{ color: COLORS.text }}>{p.description}</span>
-                  <select value={p.status} onChange={(e) => setPreventativeStatus(p.id, e.target.value)} className="text-[11px] px-1.5 py-1 rounded"
-                    style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: p.status === "done" ? COLORS.teal : p.status === "wont_fix" ? COLORS.faint : COLORS.amber }}>
-                    <option value="open">Open</option>
-                    <option value="in_progress">In progress</option>
-                    <option value="done">Done</option>
-                    <option value="wont_fix">Won't fix</option>
+            {!incident.resolved_at && (
+              <Panel title="Resolve" icon={CheckCircle2}>
+                <Field label="Root cause category">
+                  <select value={rcaCategoryId} onChange={(e) => setRcaCategoryId(e.target.value)} className="sd-in3">
+                    <option value="">Choose…</option>
+                    {lookups.rcaCategories.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
                   </select>
-                </div>
-                <div className="text-[11px] mt-1" style={{ color: COLORS.faint }}>
-                  {p.resolver_groups?.name || "Unassigned"}{p.due_date ? ` · due ${new Date(p.due_date).toLocaleDateString()}` : ""}
-                  {p.status === "open" && p.due_date && new Date(p.due_date) < new Date() ? <span style={{ color: COLORS.red }}> · overdue</span> : ""}
-                </div>
+                </Field>
+                <button onClick={suggestRCA} disabled={aiLoading === "rca"} className="sd-btn-g mb-3">{aiLoading === "rca" ? "Thinking…" : "AI: suggest category"}</button>
+                <Field label="Resolution classification">
+                  <select value={resolutionClass} onChange={(e) => setResolutionClass(e.target.value)} className="sd-in3">
+                    <option value="">Choose…</option>
+                    <option>Permanent Fix</option><option>Temporary Fix</option><option>Workaround</option><option>Escalated (No Fix)</option>
+                  </select>
+                </Field>
+                <button onClick={resolve} className="sd-btn-p">Resolve Incident</button>
+              </Panel>
+            )}
+
+            <Panel title="Preventative actions — what stops this recurring" icon={ShieldCheck}>
+              <div className="space-y-2 mb-4">
+                {preventatives.map((p) => (
+                  <div key={p.id} className="text-sm p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, opacity: p.status === "done" || p.status === "wont_fix" ? 0.55 : 1 }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span style={{ color: COLORS.text }}>{p.description}</span>
+                      <select value={p.status} onChange={(e) => setPreventativeStatus(p.id, e.target.value)} className="text-[11px] px-1.5 py-1 rounded"
+                        style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: p.status === "done" ? COLORS.teal : p.status === "wont_fix" ? COLORS.faint : COLORS.amber }}>
+                        <option value="open">Open</option>
+                        <option value="in_progress">In progress</option>
+                        <option value="done">Done</option>
+                        <option value="wont_fix">Won't fix</option>
+                      </select>
+                    </div>
+                    <div className="text-[11px] mt-1" style={{ color: COLORS.faint }}>
+                      {p.resolver_groups?.name || "Unassigned"}{p.due_date ? ` · due ${new Date(p.due_date).toLocaleDateString()}` : ""}
+                      {p.status === "open" && p.due_date && new Date(p.due_date) < new Date() ? <span style={{ color: COLORS.red }}> · overdue</span> : ""}
+                    </div>
+                  </div>
+                ))}
+                {preventatives.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No preventative actions logged for this incident yet.</p>}
               </div>
-            ))}
-            {preventatives.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No preventative actions logged for this incident yet.</p>}
-          </div>
-          <Field label="Describe the preventative action"><textarea value={preventDesc} onChange={(e) => setPreventDesc(e.target.value)} rows={2} className="sd-in3" placeholder="e.g. Add a 4G failover router as backup uplink" /></Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Owner (optional)">
-              <select value={preventGroupId} onChange={(e) => setPreventGroupId(e.target.value)} className="sd-in3">
-                <option value="">Unassigned</option>
-                {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Due date (optional)"><input type="date" value={preventDue} onChange={(e) => setPreventDue(e.target.value)} className="sd-in3" /></Field>
-          </div>
-          <button onClick={addPreventative} className="sd-btn-g">Add preventative action</button>
-        </Panel>
+              <Field label="Describe the preventative action"><textarea value={preventDesc} onChange={(e) => setPreventDesc(e.target.value)} rows={2} className="sd-in3" placeholder="e.g. Add a 4G failover router as backup uplink" /></Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Owner (optional)">
+                  <select value={preventGroupId} onChange={(e) => setPreventGroupId(e.target.value)} className="sd-in3">
+                    <option value="">Unassigned</option>
+                    {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Due date (optional)"><input type="date" value={preventDue} onChange={(e) => setPreventDue(e.target.value)} className="sd-in3" /></Field>
+              </div>
+              <button onClick={addPreventative} className="sd-btn-g">Add preventative action</button>
+            </Panel>
 
-        <RiskSignalsPanel incident={incident} />
-      </CollapsibleSection>
+            <RiskSignalsPanel incident={incident} />
+          </CollapsibleSection>
 
-      <CollapsibleSection title="Activity" icon={MessageSquare} defaultOpen={true}>
-        <CommentsPanel incident={incident} org={org} onChanged={onChanged} />
-        <Panel title="Timeline" icon={Clock}>
-          {(incident.incident_timeline || []).sort((a, b) => new Date(a.ts) - new Date(b.ts)).map((t) => (
-            <div key={t.id} className="text-xs mb-2" style={{ color: COLORS.muted }}>
-              <span className="sd-mono" style={{ color: COLORS.faint }}>{new Date(t.ts).toLocaleString()}</span> — {t.note}
-            </div>
-          ))}
-        </Panel>
-      </CollapsibleSection>
+          <CollapsibleSection title="Activity" icon={MessageSquare} defaultOpen={true}>
+            <CommentsPanel incident={incident} org={org} onChanged={onChanged} />
+            <Panel title="Timeline" icon={Clock}>
+              {(incident.incident_timeline || []).sort((a, b) => new Date(a.ts) - new Date(b.ts)).map((t) => (
+                <div key={t.id} className="text-xs mb-2" style={{ color: COLORS.muted }}>
+                  <span className="sd-mono" style={{ color: COLORS.faint }}>{new Date(t.ts).toLocaleString()}</span> — {t.note}
+                </div>
+              ))}
+            </Panel>
+          </CollapsibleSection>
 
-      <CollapsibleSection title="Related" icon={Link2} defaultOpen={false}>
-        <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
-        <VendorLinkPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
-        <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />
-        <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
-      </CollapsibleSection>
+          <CollapsibleSection title="Files & approval" icon={Clock} defaultOpen={false}
+            forceOpen={incident.record_type === "service_request" && incident.approval_status === "pending"}>
+            {incident.record_type === "service_request" && incident.approval_status === "pending" && (
+              <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
+            )}
+            <AttachmentsPanel incident={incident} org={org} showToast={showToast} />
+            <Panel title="Escalate" icon={Send}>
+              <div className="flex flex-wrap gap-2">
+                {["WhatsApp", "Email", "SMS", "Slack", "Teams"].map((ch) => (
+                  <button key={ch} onClick={() => escalate(ch)} className="sd-btn-g">{ch}</button>
+                ))}
+              </div>
+              <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
+                {(incident.escalations || []).map((e) => (
+                  <div key={e.id} className="text-xs" style={{ color: COLORS.muted }}>{new Date(e.ts).toLocaleString()} — {e.channel} ({e.delivered})</div>
+                ))}
+              </div>
+            </Panel>
+            {org.identity_module_enabled && (
+              <Panel title="Customer contact" icon={Users}>
+                {identity ? (
+                  <div className="text-sm">{identity.customer_name || "—"} · {identity.customer_contact || "—"}</div>
+                ) : <p className="text-sm" style={{ color: COLORS.muted }}>No contact details captured for this incident.</p>}
+              </Panel>
+            )}
+          </CollapsibleSection>
+        </div>
 
-      <CollapsibleSection title="Files, time & approval" icon={Clock} defaultOpen={false}
-        forceOpen={incident.record_type === "service_request" && incident.approval_status === "pending"}>
-        {incident.record_type === "service_request" && incident.approval_status === "pending" && (
-          <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
-        )}
-        <AttachmentsPanel incident={incident} org={org} showToast={showToast} />
-        <TimeSpentPanel incident={incident} lookups={lookups} org={org} showToast={showToast} />
-        <Panel title="Escalate" icon={Send}>
-          <div className="flex flex-wrap gap-2">
-            {["WhatsApp", "Email", "SMS", "Slack", "Teams"].map((ch) => (
-              <button key={ch} onClick={() => escalate(ch)} className="sd-btn-g">{ch}</button>
-            ))}
-          </div>
-          <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
-            {(incident.escalations || []).map((e) => (
-              <div key={e.id} className="text-xs" style={{ color: COLORS.muted }}>{new Date(e.ts).toLocaleString()} — {e.channel} ({e.delivered})</div>
-            ))}
-          </div>
-        </Panel>
-        {org.identity_module_enabled && (
-          <Panel title="Customer contact" icon={Users}>
-            {identity ? (
-              <div className="text-sm">{identity.customer_name || "—"} · {identity.customer_contact || "—"}</div>
-            ) : <p className="text-sm" style={{ color: COLORS.muted }}>No contact details captured for this incident.</p>}
+        <div className="md:w-72 md:shrink-0">
+          <Panel title="Status" icon={Clock}>
+            <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
+              {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
           </Panel>
-        )}
-      </CollapsibleSection>
+          <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
+          <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
+          <VendorLinkPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
+          <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />
+          <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
+          <TimeSpentPanel incident={incident} lookups={lookups} org={org} showToast={showToast} />
+        </div>
+      </div>
       <style>{`.sd-in3 { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: ${COLORS.text}; }
         .sd-btn-p { background: ${COLORS.amber}; color: #1A1200; font-weight: 600; font-size: 13px; padding: 9px 16px; border-radius: 8px; }
         .sd-btn-g { background: transparent; border: 1px solid ${COLORS.border}; color: ${COLORS.amber}; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 8px; }`}</style>
