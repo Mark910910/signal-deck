@@ -1319,66 +1319,29 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           someone glances at or occasionally updates (status, assignee,
           related assets/vendor/fields, time logged); left column holds
           the things someone is actively working through. */}
+      {/* Escalate gets its own prominent, always-open section right after
+          the header — previously buried three levels deep inside a
+          collapsed "Files & approval" section, genuinely poor placement
+          for something time-sensitive. */}
+      <Panel title="Escalate" icon={Send}>
+        <div className="flex flex-wrap gap-2">
+          {["WhatsApp", "Email", "SMS", "Slack", "Teams"].map((ch) => (
+            <button key={ch} onClick={() => escalate(ch)} className="sd-btn-g">{ch}</button>
+          ))}
+        </div>
+        <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
+          {(incident.escalations || []).map((e) => (
+            <div key={e.id} className="text-xs" style={{ color: COLORS.muted }}>{new Date(e.ts).toLocaleString()} — {e.channel} ({e.delivered})</div>
+          ))}
+        </div>
+      </Panel>
+
       <div className="md:flex md:gap-4 md:items-start">
         <div className="md:flex-1 md:min-w-0">
           <CollapsibleSection title="Work this incident" icon={ShieldCheck} defaultOpen={true}>
             <Panel title="AI mitigation suggestion" icon={Sparkles}>
               <p className="text-sm mb-2 whitespace-pre-wrap">{incident.ai_mitigation || "No suggestion yet."}</p>
               <button onClick={suggestMitigation} disabled={aiLoading === "mitigation"} className="sd-btn-g">{aiLoading === "mitigation" ? "Thinking…" : "Ask AI"}</button>
-            </Panel>
-
-            {!incident.resolved_at && (
-              <Panel title="Resolve" icon={CheckCircle2}>
-                <Field label="Root cause category">
-                  <select value={rcaCategoryId} onChange={(e) => setRcaCategoryId(e.target.value)} className="sd-in3">
-                    <option value="">Choose…</option>
-                    {lookups.rcaCategories.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                  </select>
-                </Field>
-                <button onClick={suggestRCA} disabled={aiLoading === "rca"} className="sd-btn-g mb-3">{aiLoading === "rca" ? "Thinking…" : "AI: suggest category"}</button>
-                <Field label="Resolution classification">
-                  <select value={resolutionClass} onChange={(e) => setResolutionClass(e.target.value)} className="sd-in3">
-                    <option value="">Choose…</option>
-                    <option>Permanent Fix</option><option>Temporary Fix</option><option>Workaround</option><option>Escalated (No Fix)</option>
-                  </select>
-                </Field>
-                <button onClick={resolve} className="sd-btn-p">Resolve Incident</button>
-              </Panel>
-            )}
-
-            <Panel title="Preventative actions — what stops this recurring" icon={ShieldCheck}>
-              <div className="space-y-2 mb-4">
-                {preventatives.map((p) => (
-                  <div key={p.id} className="text-sm p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, opacity: p.status === "done" || p.status === "wont_fix" ? 0.55 : 1 }}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span style={{ color: COLORS.text }}>{p.description}</span>
-                      <select value={p.status} onChange={(e) => setPreventativeStatus(p.id, e.target.value)} className="text-[11px] px-1.5 py-1 rounded"
-                        style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: p.status === "done" ? COLORS.teal : p.status === "wont_fix" ? COLORS.faint : COLORS.amber }}>
-                        <option value="open">Open</option>
-                        <option value="in_progress">In progress</option>
-                        <option value="done">Done</option>
-                        <option value="wont_fix">Won't fix</option>
-                      </select>
-                    </div>
-                    <div className="text-[11px] mt-1" style={{ color: COLORS.faint }}>
-                      {p.resolver_groups?.name || "Unassigned"}{p.due_date ? ` · due ${new Date(p.due_date).toLocaleDateString()}` : ""}
-                      {p.status === "open" && p.due_date && new Date(p.due_date) < new Date() ? <span style={{ color: COLORS.red }}> · overdue</span> : ""}
-                    </div>
-                  </div>
-                ))}
-                {preventatives.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No preventative actions logged for this incident yet.</p>}
-              </div>
-              <Field label="Describe the preventative action"><textarea value={preventDesc} onChange={(e) => setPreventDesc(e.target.value)} rows={2} className="sd-in3" placeholder="e.g. Add a 4G failover router as backup uplink" /></Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Owner (optional)">
-                  <select value={preventGroupId} onChange={(e) => setPreventGroupId(e.target.value)} className="sd-in3">
-                    <option value="">Unassigned</option>
-                    {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  </select>
-                </Field>
-                <Field label="Due date (optional)"><input type="date" value={preventDue} onChange={(e) => setPreventDue(e.target.value)} className="sd-in3" /></Field>
-              </div>
-              <button onClick={addPreventative} className="sd-btn-g">Add preventative action</button>
             </Panel>
 
             <RiskSignalsPanel incident={incident} />
@@ -1401,18 +1364,6 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
               <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
             )}
             <AttachmentsPanel incident={incident} org={org} showToast={showToast} />
-            <Panel title="Escalate" icon={Send}>
-              <div className="flex flex-wrap gap-2">
-                {["WhatsApp", "Email", "SMS", "Slack", "Teams"].map((ch) => (
-                  <button key={ch} onClick={() => escalate(ch)} className="sd-btn-g">{ch}</button>
-                ))}
-              </div>
-              <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
-                {(incident.escalations || []).map((e) => (
-                  <div key={e.id} className="text-xs" style={{ color: COLORS.muted }}>{new Date(e.ts).toLocaleString()} — {e.channel} ({e.delivered})</div>
-                ))}
-              </div>
-            </Panel>
             {org.identity_module_enabled && (
               <Panel title="Customer contact" icon={Users}>
                 {identity ? (
@@ -1424,12 +1375,69 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         </div>
 
         <div className="md:w-72 md:shrink-0">
+          {/* Lifecycle control cluster — current state, who's on it, how
+              it ends, read top to bottom as a natural progression. */}
           <Panel title="Status" icon={Activity}>
             <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
               {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </Panel>
           <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
+          {!incident.resolved_at && (
+            <Panel title="Resolve" icon={CheckCircle2}>
+              <Field label="Root cause category">
+                <select value={rcaCategoryId} onChange={(e) => setRcaCategoryId(e.target.value)} className="sd-in3">
+                  <option value="">Choose…</option>
+                  {lookups.rcaCategories.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+                </select>
+              </Field>
+              <button onClick={suggestRCA} disabled={aiLoading === "rca"} className="sd-btn-g mb-3">{aiLoading === "rca" ? "Thinking…" : "AI: suggest category"}</button>
+              <Field label="Resolution classification">
+                <select value={resolutionClass} onChange={(e) => setResolutionClass(e.target.value)} className="sd-in3">
+                  <option value="">Choose…</option>
+                  <option>Permanent Fix</option><option>Temporary Fix</option><option>Workaround</option><option>Escalated (No Fix)</option>
+                </select>
+              </Field>
+              <button onClick={resolve} className="sd-btn-p">Resolve Incident</button>
+            </Panel>
+          )}
+
+          {/* Tracking/reference cluster — a checklist and related
+              lookups, not active in-the-moment work. */}
+          <Panel title="Preventative actions — what stops this recurring" icon={ShieldCheck}>
+            <div className="space-y-2 mb-4">
+              {preventatives.map((p) => (
+                <div key={p.id} className="text-sm p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, opacity: p.status === "done" || p.status === "wont_fix" ? 0.55 : 1 }}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span style={{ color: COLORS.text }}>{p.description}</span>
+                    <select value={p.status} onChange={(e) => setPreventativeStatus(p.id, e.target.value)} className="text-[11px] px-1.5 py-1 rounded"
+                      style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: p.status === "done" ? COLORS.teal : p.status === "wont_fix" ? COLORS.faint : COLORS.amber }}>
+                      <option value="open">Open</option>
+                      <option value="in_progress">In progress</option>
+                      <option value="done">Done</option>
+                      <option value="wont_fix">Won't fix</option>
+                    </select>
+                  </div>
+                  <div className="text-[11px] mt-1" style={{ color: COLORS.faint }}>
+                    {p.resolver_groups?.name || "Unassigned"}{p.due_date ? ` · due ${new Date(p.due_date).toLocaleDateString()}` : ""}
+                    {p.status === "open" && p.due_date && new Date(p.due_date) < new Date() ? <span style={{ color: COLORS.red }}> · overdue</span> : ""}
+                  </div>
+                </div>
+              ))}
+              {preventatives.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No preventative actions logged for this incident yet.</p>}
+            </div>
+            <Field label="Describe the preventative action"><textarea value={preventDesc} onChange={(e) => setPreventDesc(e.target.value)} rows={2} className="sd-in3" placeholder="e.g. Add a 4G failover router as backup uplink" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Owner (optional)">
+                <select value={preventGroupId} onChange={(e) => setPreventGroupId(e.target.value)} className="sd-in3">
+                  <option value="">Unassigned</option>
+                  {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Due date (optional)"><input type="date" value={preventDue} onChange={(e) => setPreventDue(e.target.value)} className="sd-in3" /></Field>
+            </div>
+            <button onClick={addPreventative} className="sd-btn-g">Add preventative action</button>
+          </Panel>
           <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
           <VendorLinkPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
           <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />
