@@ -1577,6 +1577,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
   const [orgName, setOrgName] = useState(org.name);
   const [ioName, setIoName] = useState(org.information_officer_name || "");
   const [ioEmail, setIoEmail] = useState(org.information_officer_email || "");
+  const [emailSenderName, setEmailSenderName] = useState(org.email_sender_name || "");
   const [slack, setSlack] = useState(org.slack_webhook || "");
   const [teams, setTeams] = useState(org.teams_webhook || "");
   const [newGroup, setNewGroup] = useState("");
@@ -1586,7 +1587,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
   async function saveOrg() {
     const { data } = await supabase.from("organisations").update({
       name: orgName, information_officer_name: ioName, information_officer_email: ioEmail,
-      slack_webhook: slack, teams_webhook: teams,
+      slack_webhook: slack, teams_webhook: teams, email_sender_name: emailSenderName || null,
     }).eq("id", org.id).select().single();
     onOrgUpdated({ ...org, ...data });
     showToast("Saved");
@@ -1632,6 +1633,9 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
       <CollapsibleSection title="Organisation & branding" icon={Anchor} defaultOpen={true}>
         <Panel title="Organisation" icon={Anchor}>
           <Field label="Name"><input value={orgName} onChange={(e) => setOrgName(e.target.value)} className="sd-in5" /></Field>
+          <Field label="Email sender name — shown as the 'From' name on every outbound email, instead of 'Signal Deck'">
+            <input value={emailSenderName} onChange={(e) => setEmailSenderName(e.target.value)} placeholder={orgName || "Signal Deck"} className="sd-in5" />
+          </Field>
           <Field label="Information Officer name"><input value={ioName} onChange={(e) => setIoName(e.target.value)} className="sd-in5" /></Field>
           <Field label="Information Officer email"><input value={ioEmail} onChange={(e) => setIoEmail(e.target.value)} className="sd-in5" /></Field>
           <Field label="Slack webhook"><input value={slack} onChange={(e) => setSlack(e.target.value)} className="sd-in5" placeholder="https://hooks.slack.com/…" /></Field>
