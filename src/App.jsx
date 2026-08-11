@@ -4306,7 +4306,7 @@ function VendorsView({ org, showToast, onOpenIncident }) {
         </div>
       </Panel>
 
-      <QuoteRequestsPanel org={org} vendors={vendors} showToast={showToast} />
+      <QuoteRequestsPanel org={org} vendors={vendors} onOpenIncident={onOpenIncident} showToast={showToast} />
     </div>
   );
 }
@@ -4772,17 +4772,27 @@ function RiskSignalsPanel({ incident }) {
 // SME procurement teams value most, and the exact mechanism the leading
 // SME-focused competitor is praised for. No cap on invited vendors,
 // unlike that competitor's own free tier (capped at three).
-function QuoteRequestsPanel({ org, vendors, showToast }) {
+function QuoteRequestsPanel({ org, vendors, onOpenIncident, showToast }) {
   const [requests, setRequests] = useState([]);
   const [selected, setSelected] = useState(null);
   const [description, setDescription] = useState("");
   const [pickedVendorIds, setPickedVendorIds] = useState([]);
+  const [openIncidents, setOpenIncidents] = useState([]);
+  const [linkedIncidentId, setLinkedIncidentId] = useState("");
 
   const load = useCallback(async () => {
-    const { data } = await supabase.from("quote_requests").select("*").order("created_at", { ascending: false });
+    const { data } = await supabase.from("quote_requests").select("*, incidents(display_id, title)").order("created_at", { ascending: false });
     setRequests(data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Self-contained, lightweight fetch — closes the "no link back to the
+  // incident that prompted this" gap without threading the full incidents
+  // array through VendorsView, which doesn't otherwise need it.
+  useEffect(() => {
+    supabase.from("incidents").select("id, display_id, title").is("resolved_at", null).order("created_at", { ascending: false }).limit(50)
+      .then(({ data }) => setOpenIncidents(data || []));
+  }, []);
 
   function toggleVendor(id) {
     setPickedVendorIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -4795,12 +4805,13 @@ function QuoteRequestsPanel({ org, vendors, showToast }) {
     const { data: { session } } = await supabase.auth.getSession();
     const { data: qr, error } = await supabase.from("quote_requests").insert({
       org_id: org.id, display_id: displayId, description: redactPII(description), created_by: session?.user?.id || null,
+      incident_id: linkedIncidentId || null,
     }).select().single();
     if (error) { showToast(error.message); return; }
     await supabase.from("quote_request_vendors").insert(
       pickedVendorIds.map((vid) => ({ quote_request_id: qr.id, vendor_id: vid, org_id: org.id }))
     );
-    setDescription(""); setPickedVendorIds([]);
+    setDescription(""); setPickedVendorIds([]); setLinkedIncidentId("");
     showToast("Sent — each vendor will get an email with a link to quote");
     await load();
   }
@@ -4808,7 +4819,7 @@ function QuoteRequestsPanel({ org, vendors, showToast }) {
   return (
     <>
       {selected ? (
-        <QuoteRequestDetail request={selected} org={org} onBack={() => setSelected(null)} onChanged={load} showToast={showToast} />
+        <QuoteRequestDetail request={selected} org={org} onBack={() => setSelected(null)} onChanged={load} onOpenIncident={onOpenIncident} showToast={showToast} />
       ) : (
         <>
           <Panel title="Request quotes" icon={Truck}>
@@ -4816,6 +4827,12 @@ function QuoteRequestsPanel({ org, vendors, showToast }) {
               Each vendor gets an emailed link — no account needed, same as vendor issue tracking. Prices come back side by side, no spreadsheet required.
             </p>
             <Field label="What do you need a quote for?"><textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} className="sd-in3" /></Field>
+            <Field label="Related incident (optional)">
+              <select value={linkedIncidentId} onChange={(e) => setLinkedIncidentId(e.target.value)} className="sd-in3">
+                <option value="">Not related to a specific incident</option>
+                {openIncidents.map((i) => <option key={i.id} value={i.id}>{i.display_id} — {i.title}</option>)}
+              </select>
+            </Field>
             <Field label="Invite vendors">
               <div className="flex flex-wrap gap-1.5">
                 {vendors.map((v) => (
@@ -4838,7 +4855,9 @@ function QuoteRequestsPanel({ org, vendors, showToast }) {
                     <span className="text-sm" style={{ color: COLORS.text }}>{r.description}</span>
                     <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded uppercase" style={{ color: r.status === "awarded" ? COLORS.teal : COLORS.amber, background: (r.status === "awarded" ? COLORS.teal : COLORS.amber) + "22" }}>{r.status}</span>
                   </div>
-                  <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>{r.display_id}</div>
+                  <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>
+                    {r.display_id}{r.incidents ? ` · re: ${r.incidents.display_id} — ${r.incidents.title}` : ""}
+                  </div>
                 </button>
               ))}
               {requests.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No quote requests yet.</p>}
@@ -4850,7 +4869,7 @@ function QuoteRequestsPanel({ org, vendors, showToast }) {
   );
 }
 
-function QuoteRequestDetail({ request, org, onBack, onChanged, showToast }) {
+function QuoteRequestDetail({ request, org, onBack, onChanged, onOpenIncident, showToast }) {
   const [responses, setResponses] = useState([]);
 
   const load = useCallback(async () => {
@@ -4879,7 +4898,12 @@ function QuoteRequestDetail({ request, org, onBack, onChanged, showToast }) {
     <div>
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to quote requests</button>
       <Panel title={request.description} icon={Truck}>
-        <div className="sd-mono text-xs mb-3" style={{ color: COLORS.faint }}>{request.display_id}</div>
+        <div className="sd-mono text-xs mb-1" style={{ color: COLORS.faint }}>{request.display_id}</div>
+        {request.incidents && (
+          <button onClick={() => onOpenIncident?.(request.incident_id)} className="text-xs underline mb-2 block" style={{ color: COLORS.blue }}>
+            Related to: {request.incidents.display_id} — {request.incidents.title}
+          </button>
+        )}
         <div className="space-y-2">
           {responses.map((r) => (
             <div key={r.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
