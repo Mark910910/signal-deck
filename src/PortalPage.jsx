@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Anchor, Send, CheckCircle2 } from "lucide-react";
+import { Anchor, Send, CheckCircle2, ThumbsUp, ThumbsDown } from "lucide-react";
 import { supabase } from "./supabaseClient.js";
 
 const COLORS = {
@@ -11,7 +11,14 @@ const COLORS = {
 // visitor ever sees data from. It never imports anything that could show
 // another organisation's incidents, and it never asks for or stores a name,
 // email, or phone number — it only ever calls the narrow RPCs the database
-// exposes to the public: portal_categories and submit_via_portal.
+// exposes to the public: portal_categories, submit_via_portal,
+// search_kb_articles, and log_kb_feedback.
+//
+// Deflection lives here, not on a separate help page — research found
+// disconnected knowledge bases are "a repository," not deflection. As
+// the customer types, relevant articles surface automatically. The
+// Submit button stays visible and available throughout — self-service
+// that fails should never trap someone with no way to actually get help.
 export default function PortalPage({ slug }) {
   const [categories, setCategories] = useState([]);
   const [title, setTitle] = useState("");
@@ -19,8 +26,10 @@ export default function PortalPage({ slug }) {
   const [category, setCategory] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-  const [confirmed, setConfirmed] = useState(null); // { display_id, track_token }
+  const [confirmed, setConfirmed] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [feedbackGiven, setFeedbackGiven] = useState({});
 
   useEffect(() => {
     (async () => {
@@ -30,6 +39,22 @@ export default function PortalPage({ slug }) {
       if (data?.[0]) setCategory(data[0].name);
     })();
   }, [slug]);
+
+  // Debounced search-as-you-type — waits for a pause in typing rather
+  // than firing on every keystroke.
+  useEffect(() => {
+    if (!title.trim() || title.trim().length < 4) { setSuggestions([]); return; }
+    const timer = setTimeout(async () => {
+      const { data } = await supabase.rpc("search_kb_articles", { slug, search_query: title });
+      setSuggestions(data || []);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [title, slug]);
+
+  async function giveFeedback(articleId, helpful) {
+    await supabase.rpc("log_kb_feedback", { article_id: articleId, was_helpful: helpful });
+    setFeedbackGiven((prev) => ({ ...prev, [articleId]: true }));
+  }
 
   async function submit() {
     if (!title.trim()) return;
@@ -80,7 +105,28 @@ export default function PortalPage({ slug }) {
         <p className="text-xs mb-4" style={{ color: COLORS.muted }}>No account needed. Please don't include your name, ID number, or contact details in the description below — just describe the problem.</p>
 
         <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>What's wrong?</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary" className="w-full mb-3 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary" className="w-full mb-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+
+        {suggestions.length > 0 && (
+          <div className="mb-3 space-y-2">
+            <p className="text-[11px]" style={{ color: COLORS.teal }}>This might already answer it:</p>
+            {suggestions.map((s) => (
+              <div key={s.id} className="p-2.5 rounded-lg" style={{ background: COLORS.bg, border: `1px solid ${COLORS.teal}44` }}>
+                <div className="text-sm font-medium mb-1" style={{ color: COLORS.text }}>{s.title}</div>
+                <p className="text-xs mb-2" style={{ color: COLORS.muted }}>{s.body}</p>
+                {!feedbackGiven[s.id] ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px]" style={{ color: COLORS.muted }}>Did this help?</span>
+                    <button onClick={() => giveFeedback(s.id, true)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }}><ThumbsUp size={12} color={COLORS.teal} /></button>
+                    <button onClick={() => giveFeedback(s.id, false)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }}><ThumbsDown size={12} color={COLORS.muted} /></button>
+                  </div>
+                ) : (
+                  <p className="text-[11px]" style={{ color: COLORS.teal }}>Thanks — still need help? Just submit below.</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Details (optional)</label>
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="w-full mb-3 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
@@ -92,6 +138,9 @@ export default function PortalPage({ slug }) {
 
         {error && <p className="text-xs mb-3" style={{ color: COLORS.red }}>{error}</p>}
 
+        {/* Always visible, never gated behind trying self-service first —
+            the research is explicit that trapping someone here is worse
+            than not offering self-service at all. */}
         <button onClick={submit} disabled={submitting || !title.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2" style={{ background: COLORS.amber, color: "#1A1200" }}>
           <Send size={14} /> {submitting ? "Submitting…" : "Submit"}
         </button>
