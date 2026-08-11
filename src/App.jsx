@@ -1629,91 +1629,103 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
   return (
     <div className="pb-6">
-      <Panel title="Self-service customer portal" icon={Link2}>
-        <p className="text-sm mb-3" style={{ color: COLORS.muted }}>Share this link with customers so they can log an issue without an account or login. Submissions are metadata-only — no name or contact details are ever captured here, even if the Identity Module is on.</p>
-        <div className="flex items-center gap-2 mb-2">
-          <input readOnly value={portalUrl} className="sd-in5 flex-1 sd-mono" style={{ fontSize: 11.5 }} />
-          <button onClick={copyPortalLink} className="sd-btn-p6 flex items-center gap-1.5">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
-        </div>
-        <button onClick={rotateLink} className="text-xs" style={{ color: COLORS.muted }}>Rotate link (invalidates the one above)</button>
-      </Panel>
+      <CollapsibleSection title="Organisation & branding" icon={Anchor} defaultOpen={true}>
+        <Panel title="Organisation" icon={Anchor}>
+          <Field label="Name"><input value={orgName} onChange={(e) => setOrgName(e.target.value)} className="sd-in5" /></Field>
+          <Field label="Information Officer name"><input value={ioName} onChange={(e) => setIoName(e.target.value)} className="sd-in5" /></Field>
+          <Field label="Information Officer email"><input value={ioEmail} onChange={(e) => setIoEmail(e.target.value)} className="sd-in5" /></Field>
+          <Field label="Slack webhook"><input value={slack} onChange={(e) => setSlack(e.target.value)} className="sd-in5" placeholder="https://hooks.slack.com/…" /></Field>
+          <Field label="Teams webhook"><input value={teams} onChange={(e) => setTeams(e.target.value)} className="sd-in5" placeholder="https://…webhook.office.com/…" /></Field>
+          <button onClick={saveOrg} className="sd-btn-p6">Save</button>
+        </Panel>
 
-      <Panel title="Reporting" icon={Download}>
-        <p className="text-sm mb-3" style={{ color: COLORS.muted }}>One-click export of every incident's SLA status, category, and root cause — no manual filtering.</p>
-        <button onClick={exportSlaReport} className="sd-btn-p6 flex items-center gap-1.5"><Download size={13} /> Export SLA report (CSV)</button>
-      </Panel>
-
-      <Panel title="Organisation" icon={Anchor}>
-        <Field label="Name"><input value={orgName} onChange={(e) => setOrgName(e.target.value)} className="sd-in5" /></Field>
-        <Field label="Information Officer name"><input value={ioName} onChange={(e) => setIoName(e.target.value)} className="sd-in5" /></Field>
-        <Field label="Information Officer email"><input value={ioEmail} onChange={(e) => setIoEmail(e.target.value)} className="sd-in5" /></Field>
-        <Field label="Slack webhook"><input value={slack} onChange={(e) => setSlack(e.target.value)} className="sd-in5" placeholder="https://hooks.slack.com/…" /></Field>
-        <Field label="Teams webhook"><input value={teams} onChange={(e) => setTeams(e.target.value)} className="sd-in5" placeholder="https://…webhook.office.com/…" /></Field>
-        <button onClick={saveOrg} className="sd-btn-p6">Save</button>
-      </Panel>
-
-      <Panel title="Resolver groups" icon={Users}>
-        {lookups.resolverGroups.map((g) => (
-          <div key={g.id} className="flex items-center justify-between text-sm py-1">{g.name}<button onClick={() => removeItem("resolver_groups", g.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
-        ))}
-        <div className="flex gap-2 mt-2"><input value={newGroup} onChange={(e) => setNewGroup(e.target.value)} className="sd-in5 flex-1" placeholder="New group" /><button onClick={addGroup} className="sd-btn-p6">Add</button></div>
-      </Panel>
-
-      <Panel title="Categories" icon={ScanEye}>
-        {lookups.categories.map((c) => (
-          <div key={c.id} className="flex items-center justify-between text-sm py-1">{c.name}<button onClick={() => removeItem("categories", c.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
-        ))}
-        <div className="flex gap-2 mt-2"><input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="sd-in5 flex-1" placeholder="New category" /><button onClick={addCategory} className="sd-btn-p6">Add</button></div>
-      </Panel>
-
-      <Panel title="Root cause taxonomy" icon={ScanEye}>
-        {lookups.rcaCategories.map((r) => (
-          <div key={r.id} className="flex items-center justify-between text-sm py-1">{r.name}<button onClick={() => removeItem("rca_categories", r.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
-        ))}
-        <div className="flex gap-2 mt-2"><input value={newRca} onChange={(e) => setNewRca(e.target.value)} className="sd-in5 flex-1" placeholder="New RCA category" /><button onClick={addRca} className="sd-btn-p6">Add</button></div>
-      </Panel>
-
-      <Panel title="Severity, SLA & business impact" icon={Clock}>
-        <div className="grid grid-cols-[auto_1fr_1fr] gap-2 mb-1.5 text-[10px]" style={{ color: COLORS.faint }}>
-          <span></span><span>SLA (minutes)</span><span>Business weight (1-5)</span>
-        </div>
-        {lookups.severities.map((s) => (
-          <div key={s.id} className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center mb-2">
-            <SeverityPill name={s.name} />
-            <input type="number" defaultValue={s.sla_minutes} onBlur={(e) => updateSla(s.id, +e.target.value)} className="sd-in5" />
-            <input type="number" min="1" max="5" defaultValue={s.business_weight} onBlur={(e) => updateWeight(s.id, +e.target.value)} className="sd-in5" />
+        <Panel title="Self-service customer portal" icon={Link2}>
+          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>Share this link with customers so they can log an issue without an account or login. Submissions are metadata-only — no name or contact details are ever captured here, even if the Identity Module is on.</p>
+          <div className="flex items-center gap-2 mb-2">
+            <input readOnly value={portalUrl} className="sd-in5 flex-1 sd-mono" style={{ fontSize: 11.5 }} />
+            <button onClick={copyPortalLink} className="sd-btn-p6 flex items-center gap-1.5">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
           </div>
-        ))}
-        <p className="text-[11px] mt-1" style={{ color: COLORS.faint }}>Business weight doesn't change the SLA clock — it's used to sort the dashboard by revenue risk, not just severity label.</p>
-      </Panel>
+          <button onClick={rotateLink} className="text-xs" style={{ color: COLORS.muted }}>Rotate link (invalidates the one above)</button>
+        </Panel>
 
-      <InvitePanel org={org} lookups={lookups} showToast={showToast} />
+        <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
 
-      <TeamAssignmentPanel org={org} lookups={lookups} showToast={showToast} />
+        <IncidentLayoutPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+      </CollapsibleSection>
 
-      <CustomFieldsPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
+      <CollapsibleSection title="People" icon={Users} defaultOpen={false}>
+        <Panel title="Resolver groups" icon={Users}>
+          {lookups.resolverGroups.map((g) => (
+            <div key={g.id} className="flex items-center justify-between text-sm py-1">{g.name}<button onClick={() => removeItem("resolver_groups", g.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
+          ))}
+          <div className="flex gap-2 mt-2"><input value={newGroup} onChange={(e) => setNewGroup(e.target.value)} className="sd-in5 flex-1" placeholder="New group" /><button onClick={addGroup} className="sd-btn-p6">Add</button></div>
+        </Panel>
 
-      {isModuleEnabled(org, "service_catalog") && <ServiceCatalogPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
+        <InvitePanel org={org} lookups={lookups} showToast={showToast} />
 
-      {isModuleEnabled(org, "cmdb") && <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
+        <TeamAssignmentPanel org={org} lookups={lookups} showToast={showToast} />
 
-      {isModuleEnabled(org, "sla_policies") && <SLAPoliciesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
+        {isModuleEnabled(org, "on_call") && <OnCallPanel org={org} lookups={lookups} showToast={showToast} />}
+      </CollapsibleSection>
 
-      <AutomationTrustPanel org={org} showToast={showToast} />
+      <CollapsibleSection title="Ticket setup" icon={ScanEye} defaultOpen={false}>
+        <Panel title="Categories" icon={ScanEye}>
+          {lookups.categories.map((c) => (
+            <div key={c.id} className="flex items-center justify-between text-sm py-1">{c.name}<button onClick={() => removeItem("categories", c.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
+          ))}
+          <div className="flex gap-2 mt-2"><input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="sd-in5 flex-1" placeholder="New category" /><button onClick={addCategory} className="sd-btn-p6">Add</button></div>
+        </Panel>
 
-      <VendorSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+        <Panel title="Root cause taxonomy" icon={ScanEye}>
+          {lookups.rcaCategories.map((r) => (
+            <div key={r.id} className="flex items-center justify-between text-sm py-1">{r.name}<button onClick={() => removeItem("rca_categories", r.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
+          ))}
+          <div className="flex gap-2 mt-2"><input value={newRca} onChange={(e) => setNewRca(e.target.value)} className="sd-in5 flex-1" placeholder="New RCA category" /><button onClick={addRca} className="sd-btn-p6">Add</button></div>
+        </Panel>
 
-      <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+        <Panel title="Severity, SLA & business impact" icon={Clock}>
+          <div className="grid grid-cols-[auto_1fr_1fr] gap-2 mb-1.5 text-[10px]" style={{ color: COLORS.faint }}>
+            <span></span><span>SLA (minutes)</span><span>Business weight (1-5)</span>
+          </div>
+          {lookups.severities.map((s) => (
+            <div key={s.id} className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center mb-2">
+              <SeverityPill name={s.name} />
+              <input type="number" defaultValue={s.sla_minutes} onBlur={(e) => updateSla(s.id, +e.target.value)} className="sd-in5" />
+              <input type="number" min="1" max="5" defaultValue={s.business_weight} onBlur={(e) => updateWeight(s.id, +e.target.value)} className="sd-in5" />
+            </div>
+          ))}
+          <p className="text-[11px] mt-1" style={{ color: COLORS.faint }}>Business weight doesn't change the SLA clock — it's used to sort the dashboard by revenue risk, not just severity label.</p>
+        </Panel>
 
-      <IncidentLayoutPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+        {isModuleEnabled(org, "sla_policies") && <SLAPoliciesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
 
-      <KBArticlesPanel org={org} showToast={showToast} />
+        <CustomFieldsPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />
 
-      {isModuleEnabled(org, "on_call") && <OnCallPanel org={org} lookups={lookups} showToast={showToast} />}
+        {isModuleEnabled(org, "service_catalog") && <ServiceCatalogPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
 
-      <AutomationRulesPanel org={org} lookups={lookups} showToast={showToast} />
+        {isModuleEnabled(org, "cmdb") && <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
+      </CollapsibleSection>
 
-      <IntegrationsPanel org={org} showToast={showToast} />
+      <CollapsibleSection title="Automation & knowledge" icon={Zap} defaultOpen={false}>
+        <AutomationRulesPanel org={org} lookups={lookups} showToast={showToast} />
+
+        <AutomationTrustPanel org={org} showToast={showToast} />
+
+        <KBArticlesPanel org={org} showToast={showToast} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Vendors" icon={Truck} defaultOpen={false}>
+        <VendorSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+      </CollapsibleSection>
+
+      <CollapsibleSection title="Data & integrations" icon={Download} defaultOpen={false}>
+        <Panel title="Reporting" icon={Download}>
+          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>One-click export of every incident's SLA status, category, and root cause — no manual filtering.</p>
+          <button onClick={exportSlaReport} className="sd-btn-p6 flex items-center gap-1.5"><Download size={13} /> Export SLA report (CSV)</button>
+        </Panel>
+
+        <IntegrationsPanel org={org} showToast={showToast} />
+      </CollapsibleSection>
 
       <style>{`.sd-in5 { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 7px 10px; font-size: 13px; color: ${COLORS.text}; }
         .sd-btn-p6 { background: ${COLORS.amber}; color: #1A1200; font-weight: 600; font-size: 12.5px; padding: 7px 14px; border-radius: 8px; }`}</style>
