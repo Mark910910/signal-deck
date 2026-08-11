@@ -54,6 +54,17 @@ function getTerm(org, key, fallback) {
   return orgTerm || templateTerm || fallback;
 }
 
+// Incident Detail's optional panels and section defaults, admin-
+// configurable per organisation — same lightweight JSON-preference
+// pattern as isModuleEnabled, safe empty-object default if never set.
+function isPanelHidden(org, panelKey) {
+  return !!org?.incident_layout?.hiddenPanels?.includes(panelKey);
+}
+function sectionDefaultOpen(org, sectionKey, fallback) {
+  const stored = org?.incident_layout?.sectionsOpen?.[sectionKey];
+  return stored === undefined ? fallback : stored;
+}
+
 function fmtDuration(ms) {
   if (ms < 0) ms = 0;
   const mins = Math.floor(ms / 60000);
@@ -389,7 +400,7 @@ function MainApp({ org, onOrgUpdated }) {
         </nav>
 
         <main className="flex-1 min-w-0">
-          {tab === "deck" && <Deck incidents={incidents} lookups={lookups} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }}
+          {tab === "deck" && <Deck incidents={incidents} lookups={lookups} org={org} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }}
             onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} />}
           {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} onSelect={setSelectedId} initFilter={incidentListInit} onInitConsumed={() => setIncidentListInit(null)} />}
           {tab === "incidents" && selected && (
@@ -499,7 +510,7 @@ function CollapsibleSection({ title, icon: Icon, defaultOpen = false, forceOpen 
 }
 
 /* ================================== DECK =================================== */
-function Deck({ incidents, lookups, tick, onOpen, onNavigateIncidents }) {
+function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents }) {
   // Business Impact SLA: surface the highest revenue-risk open incidents
   // first, not just whatever was logged most recently.
   const open = incidents.filter((i) => !i.resolved_at)
@@ -540,7 +551,7 @@ function Deck({ incidents, lookups, tick, onOpen, onNavigateIncidents }) {
           </ResponsiveContainer>
         )}
       </Panel>
-      <Panel title="Open incidents" icon={Radio}>
+      <Panel title={`Open ${getTerm(org, "incidents", "incidents").toLowerCase()}`} icon={Radio}>
         <div className="divide-y" style={{ borderColor: COLORS.border }}>
           {open.slice(0, 8).map((inc) => (
             <button key={inc.id} onClick={() => onOpen(inc.id)} className="w-full flex items-center justify-between gap-3 py-2.5 text-left">
@@ -880,7 +891,7 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
             <SLABadge incident={inc} />
           </button>
         ))}
-        {list.length === 0 && <div className="p-8 text-center text-sm" style={{ color: COLORS.muted }}>No incidents match.</div>}
+        {list.length === 0 && <div className="p-8 text-center text-sm" style={{ color: COLORS.muted }}>No {getTerm(org, "incidents", "incidents").toLowerCase()} match.</div>}
       </div>
     </div>
   );
@@ -1025,9 +1036,9 @@ function IncidentForm({ lookups, org, onCreated }) {
   }
 
   return (
-    <Panel title="Log a new incident" icon={Plus}>
+    <Panel title={`Log a new ${getTerm(org, "incident", "incident").toLowerCase()}`} icon={Plus}>
       <div className="flex gap-1.5 mb-3">
-        {[["incident", "Incident — something's broken"], ["service_request", "Request — something's needed"]].map(([val, label]) => (
+        {[["incident", `${getTerm(org, "incident", "Incident")} — something's broken`], ["service_request", "Request — something's needed"]].map(([val, label]) => (
           <button key={val} type="button" onClick={() => setRecordType(val)} className="text-xs px-2.5 py-1.5 rounded-full"
             style={{ background: recordType === val ? COLORS.amber + "22" : COLORS.surfaceHi, color: recordType === val ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
             {label}
@@ -1102,7 +1113,7 @@ function IncidentForm({ lookups, org, onCreated }) {
         </div>
       )}
       <button onClick={submit} disabled={saving || !title.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm mt-1" style={{ background: COLORS.amber, color: "#1A1200" }}>
-        {saving ? "Logging…" : "Log Incident"}
+        {saving ? "Logging…" : `Log ${getTerm(org, "incident", "Incident")}`}
       </button>
       <style>{`.sd-in { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: ${COLORS.text}; margin-bottom: 2px; }`}</style>
     </Panel>
@@ -1338,16 +1349,18 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
 
       <div className="md:flex md:gap-4 md:items-start">
         <div className="md:flex-1 md:min-w-0">
-          <CollapsibleSection title="Work this incident" icon={ShieldCheck} defaultOpen={true}>
+          <CollapsibleSection title="Work this incident" icon={ShieldCheck} defaultOpen={sectionDefaultOpen(org, "workThisIncident", true)}>
             <Panel title="AI mitigation suggestion" icon={Sparkles}>
               <p className="text-sm mb-2 whitespace-pre-wrap">{incident.ai_mitigation || "No suggestion yet."}</p>
               <button onClick={suggestMitigation} disabled={aiLoading === "mitigation"} className="sd-btn-g">{aiLoading === "mitigation" ? "Thinking…" : "Ask AI"}</button>
             </Panel>
 
+            <RCAAnalysisPanel incident={incident} org={org} lookups={lookups} onCategorySuggested={setRcaCategoryId} showToast={showToast} />
+
             <RiskSignalsPanel incident={incident} />
           </CollapsibleSection>
 
-          <CollapsibleSection title="Activity" icon={MessageSquare} defaultOpen={true}>
+          <CollapsibleSection title="Activity" icon={MessageSquare} defaultOpen={sectionDefaultOpen(org, "activity", true)}>
             <CommentsPanel incident={incident} org={org} onChanged={onChanged} />
             <Panel title="Timeline" icon={Clock}>
               {(incident.incident_timeline || []).sort((a, b) => new Date(a.ts) - new Date(b.ts)).map((t) => (
@@ -1358,7 +1371,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
             </Panel>
           </CollapsibleSection>
 
-          <CollapsibleSection title="Files & approval" icon={CheckCircle2} defaultOpen={false}
+          <CollapsibleSection title="Files & approval" icon={CheckCircle2} defaultOpen={sectionDefaultOpen(org, "filesApproval", false)}
             forceOpen={incident.record_type === "service_request" && incident.approval_status === "pending"}>
             {incident.record_type === "service_request" && incident.approval_status === "pending" && (
               <ApprovalPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
@@ -1398,7 +1411,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
                   <option>Permanent Fix</option><option>Temporary Fix</option><option>Workaround</option><option>Escalated (No Fix)</option>
                 </select>
               </Field>
-              <button onClick={resolve} className="sd-btn-p">Resolve Incident</button>
+              <button onClick={resolve} className="sd-btn-p">Resolve {getTerm(org, "incident", "Incident")}</button>
             </Panel>
           )}
 
@@ -1438,11 +1451,11 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
             </div>
             <button onClick={addPreventative} className="sd-btn-g">Add preventative action</button>
           </Panel>
-          <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
-          <VendorLinkPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />
-          <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />
-          <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />
-          <TimeSpentPanel incident={incident} lookups={lookups} org={org} showToast={showToast} />
+          {!isPanelHidden(org, "affectedAssets") && <AffectedCIsPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />}
+          {!isPanelHidden(org, "vendor") && <VendorLinkPanel incident={incident} org={org} onChanged={onChanged} showToast={showToast} />}
+          {!isPanelHidden(org, "problemLink") && <ProblemLinkPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} showToast={showToast} />}
+          {!isPanelHidden(org, "customFields") && <CustomFieldsValuesPanel incident={incident} lookups={lookups} org={org} onChanged={onChanged} />}
+          {!isPanelHidden(org, "timeSpent") && <TimeSpentPanel incident={incident} lookups={lookups} org={org} showToast={showToast} />}
         </div>
       </div>
       <style>{`.sd-in3 { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: ${COLORS.text}; }
@@ -1691,6 +1704,10 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
       <VendorSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
 
       <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+
+      <IncidentLayoutPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
+
+      <KBArticlesPanel org={org} showToast={showToast} />
 
       {isModuleEnabled(org, "on_call") && <OnCallPanel org={org} lookups={lookups} showToast={showToast} />}
 
@@ -3354,6 +3371,9 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, init
             <p className="text-[11px] mt-2" style={{ color: COLORS.faint }}>Logged as a preventative action — its effectiveness will show in the Preventatives tab.</p>
           )}
         </Panel>
+
+        <RCAAnalysisPanel problemId={p.id} org={org} lookups={lookups} showToast={showToast} />
+
         <Panel title="Linked incidents" icon={AlertTriangle}>
           {(p.problem_incidents || []).map((pi) => (
             <div key={pi.incident_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
@@ -4926,5 +4946,327 @@ function CommandSummaryPanel({ incident, incidents, lookups }) {
         </div>
       )}
     </div>
+  );
+}
+
+/* ============================== INCIDENT LAYOUT PANEL (Settings) ============= */
+// Real gap closed: every org previously got the exact same Incident
+// Detail layout, no admin control. Extends the same Template & Modules
+// pattern already built rather than inventing a new mechanism — org's
+// own choice always wins, safe defaults if never touched.
+const OPTIONAL_INCIDENT_PANELS = [
+  { key: "affectedAssets", label: "Affected assets" },
+  { key: "vendor", label: "Related vendor" },
+  { key: "problemLink", label: "Problem link" },
+  { key: "customFields", label: "Custom fields" },
+  { key: "timeSpent", label: "Time spent" },
+];
+const INCIDENT_SECTIONS = [
+  { key: "workThisIncident", label: "\"Work this incident\" open by default", fallback: true },
+  { key: "activity", label: "\"Activity\" open by default", fallback: true },
+  { key: "filesApproval", label: "\"Files & approval\" open by default", fallback: false },
+];
+
+function IncidentLayoutPanel({ org, onOrgUpdated, showToast }) {
+  const [hiddenPanels, setHiddenPanels] = useState(org.incident_layout?.hiddenPanels || []);
+  const [sectionsOpen, setSectionsOpen] = useState(org.incident_layout?.sectionsOpen || {});
+
+  function togglePanel(key) {
+    setHiddenPanels((prev) => prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]);
+  }
+  function toggleSection(key, fallback) {
+    const current = sectionsOpen[key] === undefined ? fallback : sectionsOpen[key];
+    setSectionsOpen((prev) => ({ ...prev, [key]: !current }));
+  }
+
+  async function save() {
+    const newLayout = { hiddenPanels, sectionsOpen };
+    await supabase.from("organisations").update({ incident_layout: newLayout }).eq("id", org.id);
+    showToast("Saved");
+    await onOrgUpdated({ ...org, incident_layout: newLayout });
+  }
+
+  return (
+    <Panel title="Incident page layout" icon={Layers}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Every team's priorities differ — hide panels your team never uses, and choose which sections open automatically. Status, Assignee, Resolve, and Preventative Actions always stay, since those are core to working any incident.
+      </p>
+
+      <div className="text-xs font-semibold mb-2" style={{ color: COLORS.faint }}>OPTIONAL PANELS</div>
+      <div className="space-y-1.5 mb-4">
+        {OPTIONAL_INCIDENT_PANELS.map((p) => (
+          <label key={p.key} className="flex items-center justify-between text-sm p-2 rounded-lg cursor-pointer" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <span style={{ color: COLORS.text }}>{p.label}</span>
+            <input type="checkbox" checked={!hiddenPanels.includes(p.key)} onChange={() => togglePanel(p.key)} />
+          </label>
+        ))}
+      </div>
+
+      <div className="text-xs font-semibold mb-2" style={{ color: COLORS.faint }}>SECTION DEFAULTS</div>
+      <div className="space-y-1.5 mb-4">
+        {INCIDENT_SECTIONS.map((s) => {
+          const isOpen = sectionsOpen[s.key] === undefined ? s.fallback : sectionsOpen[s.key];
+          return (
+            <label key={s.key} className="flex items-center justify-between text-sm p-2 rounded-lg cursor-pointer" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span style={{ color: COLORS.text }}>{s.label}</span>
+              <input type="checkbox" checked={isOpen} onChange={() => toggleSection(s.key, s.fallback)} />
+            </label>
+          );
+        })}
+      </div>
+
+      <button onClick={save} className="sd-btn-p6">Save</button>
+    </Panel>
+  );
+}
+
+/* ============================== RCA ANALYSIS PANEL ============================== */
+// The real gap this closes: rca_categories is a label picked from a
+// dropdown — this is the actual reasoning trail behind that label.
+// Two standard techniques, matched to the research's central finding:
+// the most common real failure isn't lacking a method, it's using the
+// wrong one. 5 Whys suits a single linear cause; Fishbone suits multiple
+// interacting factors. AI suggests which fits — click-triggered, human
+// decides, same pattern as every other AI touchpoint tonight — rather
+// than forcing everyone through one fixed template regardless of fit.
+const FISHBONE_CATEGORIES = [
+  { key: "man", label: "People" }, { key: "machine", label: "Machine/Technology" },
+  { key: "method", label: "Method/Process" }, { key: "material", label: "Material/Inputs" },
+  { key: "measurement", label: "Measurement" }, { key: "milieu", label: "Environment" },
+];
+
+function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggested, showToast }) {
+  const [analyses, setAnalyses] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [method, setMethod] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [problemStatement, setProblemStatement] = useState("");
+  const [whys, setWhys] = useState([""]);
+  const [fishbone, setFishbone] = useState({ man: "", machine: "", method: "", material: "", measurement: "", milieu: "" });
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    const column = incident ? "incident_id" : "problem_id";
+    const id = incident ? incident.id : problemId;
+    const { data } = await supabase.from("rca_analyses").select("*").eq(column, id).order("created_at", { ascending: false });
+    setAnalyses(data || []);
+  }, [incident, problemId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function suggestMethod() {
+    if (!problemStatement.trim()) { showToast("Describe the problem first"); return; }
+    setSuggesting(true);
+    const result = await askAI(
+      "A user is investigating a technical incident's root cause. If the problem sounds like it has one clear, single, linear chain of causes, respond with exactly: five_whys. If it sounds like several different factors could be combining to cause it (people, process, technology, environment all potentially involved), respond with exactly: fishbone. Respond with only that one word, nothing else.",
+      redactPII(problemStatement)
+    );
+    setSuggesting(false);
+    const clean = (result || "").trim().toLowerCase();
+    if (clean.includes("fishbone")) setMethod("fishbone");
+    else setMethod("five_whys");
+  }
+
+  function updateWhy(idx, value) {
+    setWhys((prev) => prev.map((w, i) => i === idx ? value : w));
+  }
+  function addWhy() {
+    // Directly addresses the documented failure: "most root cause
+    // analyses stop one why too early" — capped at 5, matching the
+    // technique's own name, not unlimited.
+    if (whys.length < 5) setWhys((prev) => [...prev, ""]);
+  }
+
+  async function save() {
+    if (!problemStatement.trim()) { showToast("Describe the problem first"); return; }
+    if (!method) { showToast("Choose a method, or let AI suggest one"); return; }
+    setSaving(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    const content = method === "five_whys"
+      ? { whys: whys.filter((w) => w.trim()).map(redactPII) }
+      : Object.fromEntries(FISHBONE_CATEGORIES.map((c) => [c.key, redactPII(fishbone[c.key])]));
+    const { error } = await supabase.from("rca_analyses").insert({
+      org_id: org.id, incident_id: incident ? incident.id : null, problem_id: incident ? null : problemId,
+      method, problem_statement: redactPII(problemStatement), content,
+      created_by: session?.user?.id || null,
+    });
+    setSaving(false);
+    if (error) { showToast(error.message); return; }
+    setShowNew(false); setMethod(""); setProblemStatement(""); setWhys([""]);
+    setFishbone({ man: "", machine: "", method: "", material: "", measurement: "", milieu: "" });
+    showToast("Analysis saved");
+    await load();
+  }
+
+  // Closes the gap between this panel and the existing "Root cause
+  // category" dropdown in Resolve — previously two separate things with
+  // near-identical names, unconnected. Click-triggered, human confirms,
+  // same pattern as every other AI suggestion tonight — this only fills
+  // in the dropdown above, it never saves anything on its own.
+  const [suggestingCategory, setSuggestingCategory] = useState(false);
+  async function suggestCategoryFrom(analysis) {
+    if (!lookups?.rcaCategories?.length || !onCategorySuggested) return;
+    setSuggestingCategory(true);
+    const names = lookups.rcaCategories.map((r) => r.name).join(", ");
+    const summary = analysis.method === "five_whys"
+      ? (analysis.content.whys || []).join(" → ")
+      : Object.entries(analysis.content).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join("; ");
+    const result = await askAI(
+      `You are an ITSM assistant. Pick the single best-fitting root cause category from this exact list: ${names}. Respond with ONLY the category name, nothing else.`,
+      `Problem: ${analysis.problem_statement}\nAnalysis: ${summary}`
+    );
+    setSuggestingCategory(false);
+    const match = lookups.rcaCategories.find((r) => result && result.trim().toLowerCase().includes(r.name.toLowerCase()));
+    if (match) { onCategorySuggested(match.id); showToast("Category suggested above — review and confirm in Resolve"); }
+    else showToast("Couldn't find a confident match — pick manually");
+  }
+
+  return (
+    <Panel title="Root cause analysis" icon={ScanEye}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        The reasoning behind the root cause category, not just the label. Two guided techniques, matched to the problem — not one fixed template forced on every incident.
+      </p>
+
+      <div className="space-y-2 mb-3">
+        {analyses.map((a) => (
+          <div key={a.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold" style={{ color: COLORS.amber }}>{a.method === "five_whys" ? "5 Whys" : "Fishbone"}</span>
+              <span className="text-[10px]" style={{ color: COLORS.faint }}>{new Date(a.created_at).toLocaleDateString()}</span>
+            </div>
+            <p className="text-sm mb-2" style={{ color: COLORS.text }}>{a.problem_statement}</p>
+            {a.method === "five_whys" ? (
+              <div className="space-y-1">
+                {(a.content.whys || []).map((w, i) => (
+                  <div key={i} className="text-xs" style={{ color: COLORS.muted }}>Why {i + 1}: {w}</div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-1.5">
+                {FISHBONE_CATEGORIES.filter((c) => a.content[c.key]).map((c) => (
+                  <div key={c.key} className="text-xs" style={{ color: COLORS.muted }}><span style={{ color: COLORS.faint }}>{c.label}:</span> {a.content[c.key]}</div>
+                ))}
+              </div>
+            )}
+            {onCategorySuggested && (
+              <button onClick={() => suggestCategoryFrom(a)} disabled={suggestingCategory} className="text-xs mt-2" style={{ color: COLORS.teal }}>
+                {suggestingCategory ? "…" : "Use this to suggest a category above"}
+              </button>
+            )}
+          </div>
+        ))}
+        {analyses.length === 0 && !showNew && <p className="text-xs" style={{ color: COLORS.faint }}>No structured analysis run yet.</p>}
+      </div>
+
+      {!showNew ? (
+        <button onClick={() => setShowNew(true)} className="sd-btn-g">Run a root cause analysis</button>
+      ) : (
+        <div className="rounded-lg p-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
+          <Field label="Problem statement — be specific, with numbers if you have them">
+            <textarea value={problemStatement} onChange={(e) => setProblemStatement(e.target.value)} rows={2} className="sd-in3" placeholder="e.g. Tier 1 tickets rose from 45/week to 112/week starting Monday" />
+          </Field>
+
+          <div className="flex gap-2 mb-3">
+            <button onClick={() => setMethod("five_whys")} className="text-xs px-2.5 py-1.5 rounded-full" style={{ background: method === "five_whys" ? COLORS.amber + "22" : COLORS.surfaceHi, color: method === "five_whys" ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>5 Whys — one clear cause</button>
+            <button onClick={() => setMethod("fishbone")} className="text-xs px-2.5 py-1.5 rounded-full" style={{ background: method === "fishbone" ? COLORS.amber + "22" : COLORS.surfaceHi, color: method === "fishbone" ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>Fishbone — several factors</button>
+            <button onClick={suggestMethod} disabled={suggesting} className="text-xs" style={{ color: COLORS.teal }}>{suggesting ? "…" : "AI: which fits?"}</button>
+          </div>
+
+          {method === "five_whys" && (
+            <div className="mb-3">
+              {whys.map((w, i) => (
+                <Field key={i} label={`Why ${i + 1}${i > 0 ? " (why did that happen?)" : " did this happen?"}`}>
+                  <input value={w} onChange={(e) => updateWhy(i, e.target.value)} className="sd-in3" />
+                </Field>
+              ))}
+              {whys.length < 5 && <button onClick={addWhy} className="text-xs" style={{ color: COLORS.amber }}>+ Go one level deeper</button>}
+            </div>
+          )}
+
+          {method === "fishbone" && (
+            <div className="mb-3">
+              {FISHBONE_CATEGORIES.map((c) => (
+                <Field key={c.key} label={c.label}>
+                  <textarea value={fishbone[c.key]} onChange={(e) => setFishbone((prev) => ({ ...prev, [c.key]: e.target.value }))} rows={1} className="sd-in3" placeholder="Possible causes in this category…" />
+                </Field>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={save} disabled={saving || !method} className="sd-btn-p">{saving ? "Saving…" : "Save analysis"}</button>
+            <button onClick={() => setShowNew(false)} className="sd-btn-g">Cancel</button>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/* ============================== KB ARTICLES PANEL (Settings) ============= */
+// The content layer behind portal-side deflection — research named
+// content quality, not technology, as "the most common reason self-
+// service portals fail." Staff authors these; the portal surfaces them
+// automatically at the moment a customer is typing a ticket.
+function KBArticlesPanel({ org, showToast }) {
+  const [articles, setArticles] = useState([]);
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [editing, setEditing] = useState(null);
+
+  const load = useCallback(async () => {
+    const { data } = await supabase.from("kb_articles").select("*").order("created_at", { ascending: false });
+    setArticles(data || []);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function save() {
+    if (!title.trim() || !body.trim()) { showToast("Give it a title and some content"); return; }
+    const { data: { session } } = await supabase.auth.getSession();
+    if (editing) {
+      await supabase.from("kb_articles").update({ title: redactPII(title), body: redactPII(body), updated_at: new Date().toISOString() }).eq("id", editing.id);
+    } else {
+      await supabase.from("kb_articles").insert({ org_id: org.id, title: redactPII(title), body: redactPII(body), created_by: session?.user?.id || null });
+    }
+    setTitle(""); setBody(""); setEditing(null);
+    showToast("Saved");
+    await load();
+  }
+  function startEdit(a) {
+    setEditing(a); setTitle(a.title); setBody(a.body);
+  }
+  async function remove(id) {
+    await supabase.from("kb_articles").delete().eq("id", id);
+    await load();
+  }
+
+  return (
+    <Panel title="Self-service articles" icon={ScanEye}>
+      <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
+        Shown automatically to customers as they type on the portal, before they submit a ticket — not a separate help page nobody visits. Write what a customer would actually search for as the title.
+      </p>
+      <div className="space-y-2 mb-4">
+        {articles.map((a) => (
+          <div key={a.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm" style={{ color: COLORS.text }}>{a.title}</span>
+              <div className="flex gap-2">
+                <button onClick={() => startEdit(a)} className="text-xs" style={{ color: COLORS.amber }}>Edit</button>
+                <button onClick={() => remove(a.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+              </div>
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>
+              {a.view_count} shown · {a.helpful_count} helpful · {a.not_helpful_count} not helpful
+            </div>
+          </div>
+        ))}
+        {articles.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No articles yet — nothing to deflect with until there's real content here.</p>}
+      </div>
+      <Field label="Title — write it the way a customer would ask"><input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. How do I reset my password?" className="sd-in5" /></Field>
+      <Field label="Answer"><textarea value={body} onChange={(e) => setBody(e.target.value)} rows={4} className="sd-in5" /></Field>
+      <div className="flex gap-2">
+        <button onClick={save} className="sd-btn-p6">{editing ? "Save changes" : "Add article"}</button>
+        {editing && <button onClick={() => { setEditing(null); setTitle(""); setBody(""); }} className="sd-btn-g">Cancel</button>}
+      </div>
+    </Panel>
   );
 }
