@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   AlertTriangle, Clock, CheckCircle2, Radio, Search, Settings as SettingsIcon,
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
@@ -348,6 +348,8 @@ function MainApp({ org, onOrgUpdated }) {
   const [openProblemId, setOpenProblemId] = useState(null);
   const [toast, setToast] = useState(null);
   const [tick, setTick] = useState(0);
+  const [ambientFlag, setAmbientFlag] = useState(null); // { type, incidentId, title, displayId }
+  const seenFlagsRef = useRef({ breaching: new Set(), stale: new Set() });
 
   const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
 
@@ -382,6 +384,53 @@ function MainApp({ org, onOrgUpdated }) {
 
   useEffect(() => { loadLookups(); loadIncidents(); }, [loadLookups, loadIncidents]);
   useEffect(() => { const t = setInterval(() => setTick((x) => x + 1), 1000); return () => clearInterval(t); }, []);
+  // Genuinely time-based ambient detection needs incidents re-fetched
+  // periodically, not just after a user action — an SLA breach can
+  // happen purely because time passed, with nobody touching anything.
+  useEffect(() => { const t = setInterval(() => loadIncidents(), 60000); return () => clearInterval(t); }, [loadIncidents]);
+
+  // Option B, chosen over the header-badge alternative (Option A,
+  // preserved in the session log if ever reconsidered): spontaneous,
+  // cross-screen detection reusing the existing toast layer, which
+  // already renders at this level regardless of which screen someone's
+  // on. Detection itself is pure data comparison against SLABadge's own
+  // logic — zero AI cost, zero reliability risk. AI stays one click away
+  // once a flagged incident is actually opened, never firing on its own.
+  useEffect(() => {
+    if (!org?.id || incidents.length === 0 || ambientFlag) return;
+    const now = Date.now();
+    const currentBreaching = new Set();
+    const currentStale = new Set();
+    incidents.forEach((i) => {
+      if (!i.resolved_at) {
+        const deadline = new Date(i.created_at).getTime() + i.sla_minutes * 60000;
+        if (now > deadline) currentBreaching.add(i.id);
+        const lastActivity = (i.incident_timeline || []).reduce((max, t) => Math.max(max, new Date(t.ts).getTime()), new Date(i.created_at).getTime());
+        if (now - lastActivity > 5 * 86400000) currentStale.add(i.id);
+      }
+    });
+
+    const newlyBreaching = [...currentBreaching].find((id) => !seenFlagsRef.current.breaching.has(id));
+    const newlyStale = !newlyBreaching ? [...currentStale].find((id) => !seenFlagsRef.current.stale.has(id)) : null;
+    seenFlagsRef.current = { breaching: currentBreaching, stale: currentStale };
+
+    const flagType = newlyBreaching ? "newly_breaching" : newlyStale ? "ready_to_close" : null;
+    const flagId = newlyBreaching || newlyStale;
+    if (!flagType) return;
+
+    supabase.rpc("ambient_flag_should_fire", { target_org_id: org.id, target_flag_type: flagType }).then(({ data: shouldFire }) => {
+      if (shouldFire === false) return;
+      const incident = incidents.find((i) => i.id === flagId);
+      if (incident) setAmbientFlag({ type: flagType, incidentId: flagId, title: incident.title, displayId: incident.display_id });
+    });
+  }, [incidents, org, ambientFlag]);
+
+  async function recordFlagFeedback(action) {
+    if (!ambientFlag) return;
+    await supabase.from("ambient_flag_feedback").insert({
+      org_id: org.id, flag_type: ambientFlag.type, incident_id: ambientFlag.incidentId, action,
+    });
+  }
 
   async function signOut() { await supabase.auth.signOut(); }
 
@@ -463,6 +512,17 @@ function MainApp({ org, onOrgUpdated }) {
         <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-lg text-sm shadow-xl" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
           {toast}
         </div>
+      )}
+
+      {ambientFlag && (
+        <AmbientFlagToast
+          flag={ambientFlag}
+          onView={async () => {
+            await recordFlagFeedback("acted");
+            setSelectedId(ambientFlag.incidentId); setTab("incidents"); setAmbientFlag(null);
+          }}
+          onDismiss={async () => { await recordFlagFeedback("dismissed"); setAmbientFlag(null); }}
+        />
       )}
     </div>
   );
@@ -5398,5 +5458,40 @@ function KBArticlesPanel({ org, showToast }) {
         {editing && <button onClick={() => { setEditing(null); setTitle(""); setBody(""); }} className="sd-btn-g">Cancel</button>}
       </div>
     </Panel>
+  );
+}
+
+/* ============================== AMBIENT FLAG TOAST ============================== */
+// The actual "spontaneous, any screen" mechanism — reuses the fact that
+// this renders at the MainApp level already, visible regardless of
+// which tab someone's on. Distinct from the generic toast: this one
+// needs a real action (View) versus a real non-action (auto-dismiss),
+// since that distinction is what feeds the feedback-adjusted flagging.
+function AmbientFlagToast({ flag, onView, onDismiss }) {
+  useEffect(() => {
+    const t = setTimeout(() => onDismiss(), 12000); // Auto-dismiss counts as "dismissed" — a real signal, not lost.
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flag]);
+
+  const isBreaching = flag.type === "newly_breaching";
+  const color = isBreaching ? COLORS.red : COLORS.amber;
+
+  return (
+    <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 w-full max-w-sm px-4">
+      <div className="rounded-xl p-3 shadow-xl" style={{ background: COLORS.surface, border: `1px solid ${color}55` }}>
+        <div className="flex items-center gap-2 mb-1.5">
+          <AlertTriangle size={14} color={color} />
+          <span className="text-xs font-semibold" style={{ color }}>
+            {isBreaching ? "Just breached SLA" : "Might be ready to close"}
+          </span>
+        </div>
+        <p className="text-sm mb-2 truncate" style={{ color: COLORS.text }}>{flag.displayId} — {flag.title}</p>
+        <div className="flex gap-2">
+          <button onClick={onView} className="text-xs px-2.5 py-1 rounded-lg font-semibold" style={{ background: color, color: "#0A1120" }}>View</button>
+          <button onClick={onDismiss} className="text-xs px-2.5 py-1 rounded-lg" style={{ color: COLORS.muted, border: `1px solid ${COLORS.border}` }}>Dismiss</button>
+        </div>
+      </div>
+    </div>
   );
 }
