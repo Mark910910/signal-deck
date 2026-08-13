@@ -49,7 +49,7 @@ export default function VendorTrackPage({ token }) {
       <div className="w-full max-w-sm">
         <div className="flex items-center gap-2 mb-5 justify-center">
           <Anchor size={18} color={COLORS.amber} />
-          <span style={{ color: COLORS.text, fontWeight: 600 }}>Signal Deck</span>
+          <span style={{ color: COLORS.text, fontWeight: 600 }}>View this issue</span>
         </div>
 
         <div className="rounded-xl p-5" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
