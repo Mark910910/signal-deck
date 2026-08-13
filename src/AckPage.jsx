@@ -30,7 +30,7 @@ export default function AckPage({ token }) {
       <div className="w-full max-w-sm p-6 rounded-xl text-center" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
         <div className="flex items-center justify-center gap-2 mb-4">
           <Anchor size={18} color={COLORS.amber} />
-          <span className="text-base font-semibold" style={{ color: COLORS.text }}>Signal Deck</span>
+          <span className="text-base font-semibold" style={{ color: COLORS.text }}>Acknowledging incident</span>
         </div>
         {state === "loading" && <p className="text-sm" style={{ color: COLORS.muted }}>Acknowledging…</p>}
         {state === "done" && (
