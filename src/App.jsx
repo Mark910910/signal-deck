@@ -317,6 +317,28 @@ const NAV = [
   { key: "settings", label: "Settings", icon: SettingsIcon, module: null },
 ];
 
+// Deliberately just visibility, never enforcement — there's no payment
+// processor integrated yet, so hard-locking access with nothing to
+// actually pay their way back into would be a dead end, not a real
+// upgrade path. Existing organisations (created before trial tracking
+// existed) have trial_ends_at = null and correctly see nothing at all,
+// not a false "expired" state. Only shown to owner/admin, since they're
+// the ones who'd actually act on it.
+function TrialBanner({ org }) {
+  if (!org.trial_ends_at) return null;
+  if (org.myRole !== "owner" && org.myRole !== "admin") return null;
+
+  const daysLeft = Math.ceil((new Date(org.trial_ends_at).getTime() - Date.now()) / 86400000);
+  if (daysLeft > 7) return null; // Quiet until it's actually approaching — no need to nag for three weeks straight.
+
+  const expired = daysLeft <= 0;
+  return (
+    <div className="text-center py-1.5 text-xs" style={{ background: expired ? COLORS.red + "22" : COLORS.amber + "18", color: expired ? COLORS.red : COLORS.amber }}>
+      {expired ? "Your trial has ended — contact us to keep using Signal Deck." : `${daysLeft} day${daysLeft !== 1 ? "s" : ""} left in your trial.`}
+    </div>
+  );
+}
+
 function MainApp({ org, onOrgUpdated }) {
   const [tab, setTab] = useState("deck");
   const [lookups, setLookups] = useState(null); // resolver_groups, categories, statuses, severities, rca_categories
@@ -383,6 +405,8 @@ function MainApp({ org, onOrgUpdated }) {
           </button>
         </div>
       </header>
+
+      <TrialBanner org={org} />
 
       <div className="max-w-6xl mx-auto md:flex md:gap-6 px-3 md:px-4 pb-24 md:pb-10 pt-4">
         <nav className="hidden md:flex flex-col gap-1 w-52 shrink-0">
@@ -1626,6 +1650,20 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
     a.href = url; a.download = `sla-report-${Date.now()}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  // Real security boundary is the RLS policies (migration 45) — this is
+  // purely about not showing an agent a page full of forms that would
+  // fail the moment they're submitted. An honest message beats a
+  // confusing partial page.
+  if (org.myRole !== "owner" && org.myRole !== "admin") {
+    return (
+      <div className="pb-6 text-center py-12">
+        <SettingsIcon size={28} color={COLORS.faint} className="mx-auto mb-3" />
+        <p className="text-sm" style={{ color: COLORS.muted }}>Settings are managed by your organisation's owner or admin.</p>
+        <p className="text-xs mt-1" style={{ color: COLORS.faint }}>Ask them if something here needs to change.</p>
+      </div>
+    );
   }
 
   return (
