@@ -4349,13 +4349,22 @@ function VendorsView({ org, showToast, onOpenIncident }) {
   );
 }
 
-function VendorDetail({ vendor, org, onBack, onChanged, onOpenIncident, showToast }) {
+function VendorDetail({ vendor: initialVendor, org, onBack, onChanged, onOpenIncident, showToast }) {
+  const [vendor, setVendor] = useState(initialVendor);
   const [purchases, setPurchases] = useState([]);
   const [linkedIncidents, setLinkedIncidents] = useState([]);
   const [description, setDescription] = useState("");
   const [price, setPrice] = useState("");
   const [terms, setTerms] = useState("");
   const [expectedDate, setExpectedDate] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(vendor.name);
+  const [editCategory, setEditCategory] = useState(vendor.category || "");
+  const [editContactName, setEditContactName] = useState(vendor.contact_name || "");
+  const [editContactEmail, setEditContactEmail] = useState(vendor.contact_email || "");
+  const [editContactPhone, setEditContactPhone] = useState(vendor.contact_phone || "");
+  const [editTerms, setEditTerms] = useState(vendor.contract_terms || "");
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     const [p, ic] = await Promise.all([
@@ -4366,6 +4375,27 @@ function VendorDetail({ vendor, org, onBack, onChanged, onOpenIncident, showToas
     setLinkedIncidents(ic.data || []);
   }, [vendor.id]);
   useEffect(() => { load(); }, [load]);
+
+  // Real gap found by direct question: once created, a vendor's own
+  // details (name, contact, terms) could never be changed — no edit
+  // capability existed at all. Same redaction and Field patterns already
+  // used everywhere else for vendor data.
+  async function saveVendorDetails() {
+    if (!editName.trim()) { showToast("Give the vendor a name"); return; }
+    setSaving(true);
+    const updated = {
+      name: redactPII(editName), category: redactPII(editCategory),
+      contact_name: redactPII(editContactName), contact_email: redactPII(editContactEmail),
+      contact_phone: redactPII(editContactPhone), contract_terms: redactPII(editTerms),
+    };
+    const { error } = await supabase.from("vendors").update(updated).eq("id", vendor.id);
+    setSaving(false);
+    if (error) { showToast(error.message); return; }
+    setVendor((prev) => ({ ...prev, ...updated }));
+    setEditing(false);
+    showToast("Saved");
+    await onChanged();
+  }
 
   // The vendor scorecard, for free — derived entirely from incidents
   // already being tracked, no separate analytics system.
@@ -4405,10 +4435,32 @@ function VendorDetail({ vendor, org, onBack, onChanged, onOpenIncident, showToas
   return (
     <div className="pb-6">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to vendors</button>
-      <Panel title={vendor.name} icon={Truck}>
-        <div className="sd-mono text-xs mb-2" style={{ color: COLORS.faint }}>{vendor.display_id}{vendor.category ? ` · ${vendor.category}` : ""}</div>
-        {vendor.contact_name && <p className="text-sm" style={{ color: COLORS.muted }}>{vendor.contact_name}{vendor.contact_email ? ` · ${vendor.contact_email}` : ""}{vendor.contact_phone ? ` · ${vendor.contact_phone}` : ""}</p>}
-        {vendor.contract_terms && <p className="text-sm mt-2" style={{ color: COLORS.text }}>{vendor.contract_terms}</p>}
+      <Panel title={editing ? "Edit vendor" : vendor.name} icon={Truck}>
+        {editing ? (
+          <>
+            <Field label="Name"><input value={editName} onChange={(e) => setEditName(e.target.value)} className="sd-in3" /></Field>
+            <Field label="Category"><input value={editCategory} onChange={(e) => setEditCategory(e.target.value)} className="sd-in3" /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Contact name"><input value={editContactName} onChange={(e) => setEditContactName(e.target.value)} className="sd-in3" /></Field>
+              <Field label="Contact email"><input value={editContactEmail} onChange={(e) => setEditContactEmail(e.target.value)} className="sd-in3" /></Field>
+            </div>
+            <Field label="Contact phone"><input value={editContactPhone} onChange={(e) => setEditContactPhone(e.target.value)} className="sd-in3" /></Field>
+            <Field label="Contract terms"><textarea value={editTerms} onChange={(e) => setEditTerms(e.target.value)} rows={2} className="sd-in3" /></Field>
+            <div className="flex gap-2">
+              <button onClick={saveVendorDetails} disabled={saving} className="sd-btn-p">{saving ? "Saving…" : "Save"}</button>
+              <button onClick={() => setEditing(false)} className="sd-btn-g">Cancel</button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="flex items-start justify-between">
+              <div className="sd-mono text-xs mb-2" style={{ color: COLORS.faint }}>{vendor.display_id}{vendor.category ? ` · ${vendor.category}` : ""}</div>
+              <button onClick={() => setEditing(true)} className="text-xs" style={{ color: COLORS.amber }}>Edit</button>
+            </div>
+            {vendor.contact_name && <p className="text-sm" style={{ color: COLORS.muted }}>{vendor.contact_name}{vendor.contact_email ? ` · ${vendor.contact_email}` : ""}{vendor.contact_phone ? ` · ${vendor.contact_phone}` : ""}</p>}
+            {vendor.contract_terms && <p className="text-sm mt-2" style={{ color: COLORS.text }}>{vendor.contract_terms}</p>}
+          </>
+        )}
       </Panel>
 
       <div className="grid grid-cols-2 gap-3 mb-4">
