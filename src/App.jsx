@@ -11,10 +11,14 @@ import { askAI } from "./lib/ai.js";
 
 const COLORS = {
   bg: "#0A1120", surface: "#121B2E", surfaceHi: "#182338", border: "#232F47",
-  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", blue: "#6C8CFF",
+  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", blue: "#6C8CFF", yellow: "#EAB308",
   text: "#E8ECF3", muted: "#8B96AB", faint: "#5B6580",
 };
-const SEV_COLOR = { Critical: COLORS.red, High: COLORS.amber, Medium: COLORS.teal, Low: COLORS.blue };
+// Medium used to share COLORS.teal with "Met SLA" / "Resolved" / "Acknowledged"
+// — a mid-severity incident and a healthy one looked the same color at a
+// glance. Yellow keeps the Critical(red)->High(amber)->Medium->Low(blue)
+// ramp visually distinct from every "things are fine" state in the app.
+const SEV_COLOR = { Critical: COLORS.red, High: COLORS.amber, Medium: COLORS.yellow, Low: COLORS.blue };
 
 function fmtClock(ms) {
   const sign = ms < 0 ? "-" : "";
@@ -181,7 +185,6 @@ function AuthScreen({ inviteCode }) {
             </button>
           </>
         )}
-        <style>{`.sd-in { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 9px 11px; font-size: 13px; color: ${COLORS.text}; }`}</style>
       </div>
     </Centered>
   );
@@ -246,7 +249,6 @@ function OnboardingScreen({ onCreated }) {
         <button onClick={() => supabase.auth.signOut()} className="w-full text-xs mt-3" style={{ color: COLORS.muted }}>
           Not you, or landed here by mistake? Sign out
         </button>
-        <style>{`.sd-in { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 9px 11px; font-size: 13px; color: ${COLORS.text}; }`}</style>
       </div>
     </Centered>
   );
@@ -495,17 +497,23 @@ function MainApp({ org, onOrgUpdated }) {
         </main>
       </div>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden flex justify-start overflow-x-auto py-1.5 px-1" style={{ background: "rgba(10,17,32,0.97)", borderTop: `1px solid ${COLORS.border}` }}>
-        {NAV.filter((item) => isModuleEnabled(org, item.module)).map((item) => {
-          const Icon = item.icon; const active = tab === item.key;
-          const label = item.termKey ? getTerm(org, item.termKey, item.label) : item.label;
-          return (
-            <button key={item.key} onClick={() => { setTab(item.key); setSelectedId(null); }} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 shrink-0">
-              <Icon size={18} color={active ? COLORS.amber : COLORS.faint} />
-              <span className="text-[9px] font-medium whitespace-nowrap" style={{ color: active ? COLORS.amber : COLORS.faint }}>{label}</span>
-            </button>
-          );
-        })}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden" style={{ background: "rgba(10,17,32,0.97)", borderTop: `1px solid ${COLORS.border}` }}>
+        <div className="flex justify-start overflow-x-auto py-1.5 px-1">
+          {NAV.filter((item) => isModuleEnabled(org, item.module)).map((item) => {
+            const Icon = item.icon; const active = tab === item.key;
+            const label = item.termKey ? getTerm(org, item.termKey, item.label) : item.label;
+            return (
+              <button key={item.key} onClick={() => { setTab(item.key); setSelectedId(null); }} className="flex flex-col items-center gap-0.5 px-2.5 py-1.5 shrink-0">
+                <Icon size={18} color={active ? COLORS.amber : COLORS.faint} />
+                <span className="text-[10px] font-medium whitespace-nowrap" style={{ color: active ? COLORS.amber : COLORS.faint }}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+        {/* Hints that the row scrolls — with up to 11 possible items and no
+            "more" affordance before, an item past the fold (most often
+            Settings) was easy to miss entirely on a narrow phone. */}
+        <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8" style={{ background: "linear-gradient(to right, transparent, rgba(10,17,32,0.97))" }} />
       </nav>
 
       {toast && (
@@ -614,7 +622,7 @@ function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents }) {
 
   return (
     <div>
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
         <StatCard icon={AlertTriangle} label="Open" value={open.length} color={COLORS.blue}
           onClick={() => onNavigateIncidents({ filter: "open", quickFilter: null })} />
         <StatCard icon={Zap} label="Breached" value={breached.length} color={COLORS.red}
@@ -658,10 +666,10 @@ function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents }) {
 function StatCard({ icon: Icon, label, value, color, onClick }) {
   const Wrapper = onClick ? "button" : "div";
   return (
-    <Wrapper onClick={onClick} className="rounded-xl p-3.5 text-left w-full" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, cursor: onClick ? "pointer" : "default" }}>
+    <Wrapper onClick={onClick} className="rounded-xl p-2.5 sm:p-3.5 text-left w-full" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, cursor: onClick ? "pointer" : "default" }}>
       <Icon size={16} color={color} />
-      <div className="sd-display text-2xl font-semibold mt-2">{value}</div>
-      <div className="text-[11px]" style={{ color: COLORS.muted }}>{label}</div>
+      <div className="sd-display text-lg sm:text-2xl font-semibold mt-2">{value}</div>
+      <div className="text-[10px] sm:text-[11px] leading-tight" style={{ color: COLORS.muted }}>{label}</div>
     </Wrapper>
   );
 }
@@ -934,7 +942,6 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
               <button onClick={saveView} className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>Save</button>
             </div>
           )}
-          <style>{`.sd-in6 { background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 6px 8px; font-size: 12px; color: ${COLORS.text}; }`}</style>
         </div>
       )}
 
@@ -1199,7 +1206,6 @@ function IncidentForm({ lookups, org, onCreated }) {
       <button onClick={submit} disabled={saving || !title.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm mt-1" style={{ background: COLORS.amber, color: "#1A1200" }}>
         {saving ? "Logging…" : `Log ${getTerm(org, "incident", "Incident")}`}
       </button>
-      <style>{`.sd-in { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: ${COLORS.text}; margin-bottom: 2px; }`}</style>
     </Panel>
   );
 }
@@ -1542,9 +1548,6 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           {!isPanelHidden(org, "timeSpent") && <TimeSpentPanel incident={incident} lookups={lookups} org={org} showToast={showToast} />}
         </div>
       </div>
-      <style>{`.sd-in3 { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: ${COLORS.text}; }
-        .sd-btn-p { background: ${COLORS.amber}; color: #1A1200; font-weight: 600; font-size: 13px; padding: 9px 16px; border-radius: 8px; }
-        .sd-btn-g { background: transparent; border: 1px solid ${COLORS.border}; color: ${COLORS.amber}; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 8px; }`}</style>
     </div>
   );
 }
@@ -1726,8 +1729,32 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
     );
   }
 
+  // Quick-jump nav — Settings is six stacked accordions deep; someone who
+  // already knows what they want (e.g. "SLA policies") shouldn't have to
+  // scroll-and-hunt past five collapsed sections to find it.
+  const settingsSections = [
+    { id: "settings-org", label: "Organisation" },
+    { id: "settings-people", label: "People" },
+    { id: "settings-tickets", label: "Ticket setup" },
+    { id: "settings-automation", label: "Automation" },
+    { id: "settings-vendors", label: "Vendors" },
+    { id: "settings-data", label: "Data & integrations" },
+  ];
+  function jumpToSection(id) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
   return (
     <div className="pb-6">
+      <div className="sticky top-14 z-10 -mx-3 md:mx-0 px-3 md:px-0 py-2 mb-2 flex flex-wrap gap-1.5" style={{ background: COLORS.bg }}>
+        {settingsSections.map((s) => (
+          <button key={s.id} onClick={() => jumpToSection(s.id)} className="px-3 py-1.5 rounded-full text-xs font-medium"
+            style={{ background: COLORS.surface, color: COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <div id="settings-org">
       <CollapsibleSection title="Organisation & branding" icon={Anchor} defaultOpen={true}>
         <Panel title="Organisation" icon={Anchor}>
           <Field label="Name"><input value={orgName} onChange={(e) => setOrgName(e.target.value)} className="sd-in5" /></Field>
@@ -1754,7 +1781,9 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
         <IncidentLayoutPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
       </CollapsibleSection>
+      </div>
 
+      <div id="settings-people">
       <CollapsibleSection title="People" icon={Users} defaultOpen={false}>
         <Panel title="Resolver groups" icon={Users}>
           {lookups.resolverGroups.map((g) => (
@@ -1769,7 +1798,9 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
         {isModuleEnabled(org, "on_call") && <OnCallPanel org={org} lookups={lookups} showToast={showToast} />}
       </CollapsibleSection>
+      </div>
 
+      <div id="settings-tickets">
       <CollapsibleSection title="Ticket setup" icon={ScanEye} defaultOpen={false}>
         <Panel title="Categories" icon={ScanEye}>
           {lookups.categories.map((c) => (
@@ -1807,7 +1838,9 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
         {isModuleEnabled(org, "cmdb") && <CITypesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
       </CollapsibleSection>
+      </div>
 
+      <div id="settings-automation">
       <CollapsibleSection title="Automation & knowledge" icon={Zap} defaultOpen={false}>
         <AutomationRulesPanel org={org} lookups={lookups} showToast={showToast} />
 
@@ -1815,11 +1848,15 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
         <KBArticlesPanel org={org} showToast={showToast} />
       </CollapsibleSection>
+      </div>
 
+      <div id="settings-vendors">
       <CollapsibleSection title="Vendors" icon={Truck} defaultOpen={false}>
         <VendorSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
       </CollapsibleSection>
+      </div>
 
+      <div id="settings-data">
       <CollapsibleSection title="Data & integrations" icon={Download} defaultOpen={false}>
         <Panel title="Reporting" icon={Download}>
           <p className="text-sm mb-3" style={{ color: COLORS.muted }}>One-click export of every incident's SLA status, category, and root cause — no manual filtering.</p>
@@ -1828,9 +1865,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
         <IntegrationsPanel org={org} showToast={showToast} />
       </CollapsibleSection>
-
-      <style>{`.sd-in5 { width: 100%; background: ${COLORS.surfaceHi}; border: 1px solid ${COLORS.border}; border-radius: 8px; padding: 7px 10px; font-size: 13px; color: ${COLORS.text}; }
-        .sd-btn-p6 { background: ${COLORS.amber}; color: #1A1200; font-weight: 600; font-size: 12.5px; padding: 7px 14px; border-radius: 8px; }`}</style>
+      </div>
     </div>
   );
 }
