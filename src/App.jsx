@@ -4,7 +4,7 @@ import {
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
   Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server, Truck, ChevronUp, ChevronDown
 } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
 import { supabase } from "./supabaseClient.js";
 import { redactPII } from "./lib/redact.js";
 import { askAI } from "./lib/ai.js";
@@ -77,6 +77,31 @@ function fmtDuration(ms) {
   if (hrs < 24) return `${hrs}h`;
   return `${Math.floor(hrs / 24)}d`;
 }
+
+// Every toast in the app — success confirmations and thrown-error messages
+// alike — rendered identically: same neutral surface, same text, nothing
+// else. Linear, Zendesk, and Freshservice all pair their toast/snackbar
+// copy with a color and an icon so the outcome reads before anyone reads
+// the sentence. Threading an explicit success/error flag through the ~110
+// existing showToast(...) call sites across this file would be a much
+// larger, riskier change than this pass calls for, so this infers a kind
+// from the message text itself instead — every validation guard already
+// reads "Choose…", "Give…", "Describe…" etc., and every thrown error is
+// either passed straight through as error.message or already worded as a
+// failure ("Couldn't…", "…failed:", "too large"). A caller that wants to
+// be explicit can still pass a second argument, which always wins.
+function inferToastKind(message) {
+  if (typeof message !== "string") return "success";
+  const m = message.toLowerCase();
+  if (/(fail|error|invalid|expired|denied|not allowed|too large|larger than|violat|constraint|duplicate|unauthorized|permission|couldn.?t)/.test(m)) return "error";
+  if (/^(choose|give|describe|pick|enter|fill in|add an?|add at least|url,|select)\b/.test(m)) return "warn";
+  return "success";
+}
+const TOAST_KIND = {
+  success: { color: COLORS.teal, Icon: CheckCircle2 },
+  warn: { color: COLORS.amber, Icon: AlertTriangle },
+  error: { color: COLORS.red, Icon: AlertTriangle },
+};
 
 /* =============================== ROOT APP ================================= */
 export default function App({ inviteCode }) {
@@ -348,12 +373,21 @@ function MainApp({ org, onOrgUpdated }) {
   const [selectedId, setSelectedId] = useState(null);
   const [incidentListInit, setIncidentListInit] = useState(null);
   const [openProblemId, setOpenProblemId] = useState(null);
-  const [toast, setToast] = useState(null);
+  const [toast, setToast] = useState(null); // { message, kind } | null
   const [tick, setTick] = useState(0);
   const [ambientFlag, setAmbientFlag] = useState(null); // { type, incidentId, title, displayId }
   const seenFlagsRef = useRef({ breaching: new Set(), stale: new Set() });
 
-  const showToast = (m) => { setToast(m); setTimeout(() => setToast(null), 3200); };
+  // Second argument is an optional explicit override ("success" | "warn" |
+  // "error") — every existing call site still just passes a message, so
+  // the kind is inferred from that text (see inferToastKind above).
+  // Errors sit onscreen a beat longer than confirmations since there's
+  // usually more to actually read.
+  const showToast = (m, kind) => {
+    const resolvedKind = kind || inferToastKind(m);
+    setToast({ message: m, kind: resolvedKind });
+    setTimeout(() => setToast(null), resolvedKind === "error" ? 4500 : 3200);
+  };
 
   const loadLookups = useCallback(async () => {
     const [rg, cat, st, sv, rca, cf, sc, cit, slap] = await Promise.all([
@@ -412,15 +446,34 @@ function MainApp({ org, onOrgUpdated }) {
       }
     });
 
+    // Bug found on inspection: this used to overwrite seenFlagsRef with the
+    // *entire* current set every tick, regardless of whether anything got
+    // shown. Only one flag can be onscreen at a time (by design — this is
+    // meant to stay ambient, not noisy), so whenever two incidents crossed
+    // their SLA in the same tick, the one that didn't get picked was marked
+    // "seen" anyway and could never surface, even after the toast for the
+    // first one cleared. An id is only dropped here once it's no longer in
+    // the current set at all (i.e. actually resolved or no longer stale) —
+    // never just because a sibling happened to win this round.
+    seenFlagsRef.current = {
+      breaching: new Set([...seenFlagsRef.current.breaching].filter((id) => currentBreaching.has(id))),
+      stale: new Set([...seenFlagsRef.current.stale].filter((id) => currentStale.has(id))),
+    };
+
     const newlyBreaching = [...currentBreaching].find((id) => !seenFlagsRef.current.breaching.has(id));
     const newlyStale = !newlyBreaching ? [...currentStale].find((id) => !seenFlagsRef.current.stale.has(id)) : null;
-    seenFlagsRef.current = { breaching: currentBreaching, stale: currentStale };
 
     const flagType = newlyBreaching ? "newly_breaching" : newlyStale ? "ready_to_close" : null;
     const flagId = newlyBreaching || newlyStale;
     if (!flagType) return;
 
     supabase.rpc("ambient_flag_should_fire", { target_org_id: org.id, target_flag_type: flagType }).then(({ data: shouldFire }) => {
+      // Only mark this specific id seen once it's actually been offered to
+      // the throttle check above — not the whole set — so a candidate that
+      // never got its turn this tick is still eligible on the next one.
+      seenFlagsRef.current = flagType === "newly_breaching"
+        ? { ...seenFlagsRef.current, breaching: new Set([...seenFlagsRef.current.breaching, flagId]) }
+        : { ...seenFlagsRef.current, stale: new Set([...seenFlagsRef.current.stale, flagId]) };
       if (shouldFire === false) return;
       const incident = incidents.find((i) => i.id === flagId);
       if (incident) setAmbientFlag({ type: flagType, incidentId: flagId, title: incident.title, displayId: incident.display_id });
@@ -476,7 +529,7 @@ function MainApp({ org, onOrgUpdated }) {
 
         <main className="flex-1 min-w-0">
           {tab === "deck" && <Deck incidents={incidents} lookups={lookups} org={org} tick={tick} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }}
-            onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} />}
+            onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} onNavigateSettings={() => setTab("settings")} />}
           {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} onSelect={setSelectedId} initFilter={incidentListInit} onInitConsumed={() => setIncidentListInit(null)} />}
           {tab === "incidents" && selected && (
             <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick}
@@ -516,11 +569,18 @@ function MainApp({ org, onOrgUpdated }) {
         <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-8" style={{ background: "linear-gradient(to right, transparent, rgba(10,17,32,0.97))" }} />
       </nav>
 
-      {toast && (
-        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-lg text-sm shadow-xl" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
-          {toast}
-        </div>
-      )}
+      {toast && (() => {
+        const { color, Icon } = TOAST_KIND[toast.kind] || TOAST_KIND.success;
+        return (
+          <div className="sd-toast-in fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-50 w-[calc(100vw-2rem)] max-w-xs">
+            <div className="flex items-start gap-2 px-3.5 py-2.5 rounded-lg text-sm shadow-xl"
+              style={{ background: COLORS.surfaceHi, borderTop: `1px solid ${COLORS.border}`, borderRight: `1px solid ${COLORS.border}`, borderBottom: `1px solid ${COLORS.border}`, borderLeft: `3px solid ${color}` }}>
+              <Icon size={15} color={color} className="mt-0.5 shrink-0" />
+              <span style={{ color: COLORS.text }}>{toast.message}</span>
+            </div>
+          </div>
+        );
+      })()}
 
       {ambientFlag && (
         <AmbientFlagToast
@@ -602,7 +662,7 @@ function CollapsibleSection({ title, icon: Icon, defaultOpen = false, forceOpen 
 }
 
 /* ================================== DECK =================================== */
-function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents }) {
+function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents, onNavigateSettings }) {
   // Business Impact SLA: surface the highest revenue-risk open incidents
   // first, not just whatever was logged most recently.
   const open = incidents.filter((i) => !i.resolved_at)
@@ -620,8 +680,33 @@ function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents }) {
     return Object.entries(counts).map(([name, count]) => ({ name, count }));
   }, [incidents]);
 
+  // Automation trust was previously only visible three clicks deep
+  // (Settings → Automation & knowledge → expand → scroll) — exactly the
+  // kind of thing that should surface itself the moment it needs
+  // attention rather than waiting to be found, the same "don't make
+  // someone go hunting" reasoning already behind the ambient SLA-breach
+  // toast. This is deliberately a persistent banner, not another toast:
+  // "an automation needs review" is a standing condition, not a one-off
+  // event, so it shouldn't auto-dismiss or compete with a transient flag.
+  const [automationNeedsReview, setAutomationNeedsReview] = useState(0);
+  useEffect(() => {
+    if (!org?.id) return;
+    supabase.from("automation_trust_tiers").select("automation_id", { count: "exact", head: true })
+      .eq("automation_type", "automation_rule").eq("tier", "needs_review")
+      .then(({ count }) => setAutomationNeedsReview(count || 0));
+  }, [org?.id, incidents]);
+
   return (
     <div>
+      {automationNeedsReview > 0 && (
+        <button onClick={onNavigateSettings} className="w-full flex items-center gap-2.5 mb-3 p-3 rounded-xl text-left"
+          style={{ background: COLORS.red + "14", border: `1px solid ${COLORS.red}44` }}>
+          <Activity size={16} color={COLORS.red} className="shrink-0" />
+          <span className="text-sm flex-1" style={{ color: COLORS.text }}>
+            {automationNeedsReview} automation rule{automationNeedsReview > 1 ? "s" : ""} flagged as unreliable by their own track record — review in Settings
+          </span>
+        </button>
+      )}
       <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
         <StatCard icon={AlertTriangle} label="Open" value={open.length} color={COLORS.blue}
           onClick={() => onNavigateIncidents({ filter: "open", quickFilter: null })} />
@@ -2560,6 +2645,14 @@ function ChartRenderer({ chart, incidents, height = 220 }) {
             {data.map((_, idx) => <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />)}
           </Pie>
           <Tooltip contentStyle={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, borderRadius: 8, fontSize: 12 }} />
+          {/* Every other chart type here labels its categories directly on
+              an axis — pie/donut was the one place a slice's name only
+              ever existed behind a hover, so nothing distinguished two
+              similarly-sized slices without moving the mouse over each in
+              turn. Freshservice and Zendesk's own dashboard donuts always
+              carry a legend alongside the chart for exactly this reason. */}
+          <Legend layout="horizontal" align="center" verticalAlign="bottom" iconType="circle" iconSize={8}
+            wrapperStyle={{ fontSize: 11, color: COLORS.muted, paddingTop: 8 }} />
         </PieChart>
       </ResponsiveContainer>
     );
@@ -3795,7 +3888,14 @@ function AssetsView({ org, lookups, showToast, onOpenIncident }) {
 
   return (
     <div className="pb-6">
-      <div className="grid grid-cols-4 gap-3 mb-4">
+      {/* Four tiles at grid-cols-4 with no mobile step-down squeezed each
+          one into ~85px on a 375px phone — "Expiring soon" and "Needs
+          review" wrapped their labels awkwardly. Same 2-up-on-mobile
+          pattern already used for Deck's own stat row, extended here
+          since StatCard itself already shrinks its type at sm: — this was
+          the one remaining stat grid that never got a mobile column count
+          to go with it. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 mb-4">
         <StatCard icon={Server} label="Total" value={items.length} color={COLORS.blue} />
         <StatCard icon={Clock} label="Needs review" value={items.filter(isStale).length} color={COLORS.amber} />
         <StatCard icon={CheckCircle2} label="Active" value={items.filter((i) => i.status === "active").length} color={COLORS.teal} />
@@ -5518,7 +5618,7 @@ function AmbientFlagToast({ flag, onView, onDismiss }) {
   // full colored border on every edge, and the slide-in makes it feel
   // like something arriving, not something that was just plastered on.
   return (
-    <div className="fixed top-16 right-4 z-50 w-72" style={{ maxWidth: "calc(100vw - 2rem)", animation: "sd-flag-in 0.25s ease-out" }}>
+    <div className="sd-flag-in fixed top-16 right-4 z-50 w-72" style={{ maxWidth: "calc(100vw - 2rem)" }}>
       <div className="rounded-lg overflow-hidden shadow-2xl" style={{ background: COLORS.surface, borderTop: `1px solid ${COLORS.border}`, borderRight: `1px solid ${COLORS.border}`, borderBottom: `1px solid ${COLORS.border}`, borderLeft: `3px solid ${color}` }}>
         <div className="p-3">
           <div className="flex items-center gap-1.5 mb-1">
@@ -5534,7 +5634,6 @@ function AmbientFlagToast({ flag, onView, onDismiss }) {
           </div>
         </div>
       </div>
-      <style>{`@keyframes sd-flag-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }`}</style>
     </div>
   );
 }

@@ -25,3 +25,15 @@ input, textarea, select { font-family: 'Inter', sans-serif; }
 .sd-btn-g { background: transparent; border: 1px solid #232F47; color: #F5A623; font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 8px; }
 .sd-btn-p { background: #F5A623; color: #1A1200; font-weight: 600; font-size: 13px; padding: 9px 16px; border-radius: 8px; }
 .sd-btn-p6 { background: #F5A623; color: #1A1200; font-weight: 600; font-size: 12.5px; padding: 7px 14px; border-radius: 8px; }
+
+/* Notification entrance motion — was duplicated as a one-off <style> tag
+   scoped inside AmbientFlagToast alone. Moved here, alongside the other
+   consolidated shared classes above, now that the bottom-center toast
+   uses the same "arriving, not just appearing" treatment too. Two
+   directions because the two notification types enter from different
+   edges: the ambient flag slides in from the right (top-right anchored),
+   the toast rises from below (bottom-center anchored). */
+@keyframes sd-flag-in { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
+.sd-flag-in { animation: sd-flag-in 0.25s ease-out; }
+@keyframes sd-toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.sd-toast-in { animation: sd-toast-in 0.2s ease-out; }
