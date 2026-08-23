@@ -854,16 +854,23 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
           {open.slice(0, 8).map((inc) => (
             <button key={inc.id} onClick={() => onOpen(inc.id)} className="w-full flex items-center justify-between gap-3 py-2.5 text-left">
               <div className="min-w-0">
-                <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                {/* Same two-row split as IncidentList: fixed identity+state
+                    line, then an exceptions line that only exists when
+                    there's actually an exception to show. */}
+                <div className="flex items-center gap-1.5 mb-0.5">
                   <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
                   <SeverityPill name={inc.severity?.name} />
                   <StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
                   <AssigneeIndicator incident={inc} members={members} />
-                  <EscalatedBadge incident={inc} />
-                  {inc.approval_status === "pending" && (
-                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
-                  )}
                 </div>
+                {(inc.escalated_at || inc.approval_status === "pending") && (
+                  <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                    <EscalatedBadge incident={inc} />
+                    {inc.approval_status === "pending" && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
+                    )}
+                  </div>
+                )}
                 <div className="text-sm truncate">{inc.title}</div>
               </div>
               <SLABadge incident={inc} org={org} />
@@ -1229,18 +1236,32 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
         {list.map((inc) => (
           <button key={inc.id} onClick={() => onSelect(inc.id)} className="w-full text-left p-3.5 flex items-center justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap mb-1">
+              {/* Row 1 — identity + current state. Always exactly these 4:
+                  reference id, how urgent, what workflow state, who owns
+                  it. Fixed set, tight grouping, never wraps into a
+                  variable-length soup — this is the "glance and know
+                  where it stands" line. */}
+              <div className="flex items-center gap-1.5 mb-1">
                 <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
-                {inc.record_type === "service_request" && (
-                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.teal, background: COLORS.teal + "22" }}>REQUEST</span>
-                )}
                 <SeverityPill name={inc.severity?.name} /><StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
                 <AssigneeIndicator incident={inc} members={members} />
-                <EscalatedBadge incident={inc} />
-                {inc.approval_status === "pending" && (
-                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
-                )}
               </div>
+              {/* Row 2 — exceptions only. Rendered at all only when
+                  something's actually unusual about this one (rare on
+                  most incidents) — kept structurally and visually apart
+                  from row 1's routine state so an alert reads as an
+                  alert, not as one more pill in a flat list. */}
+              {(inc.record_type === "service_request" || inc.escalated_at || inc.approval_status === "pending") && (
+                <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                  {inc.record_type === "service_request" && (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.teal, background: COLORS.teal + "22" }}>REQUEST</span>
+                  )}
+                  <EscalatedBadge incident={inc} />
+                  {inc.approval_status === "pending" && (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
+                  )}
+                </div>
+              )}
               <div className="text-sm font-medium truncate">{inc.title}</div>
               <div className="mt-0.5">
                 {/* "via {source}" already reads as a label; category needs
