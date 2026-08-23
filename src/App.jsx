@@ -569,7 +569,7 @@ function MainApp({ org, onOrgUpdated }) {
               onCreated={async () => { await loadIncidents(); setTab("incidents"); showToast("Incident logged"); }} />
           )}
           {tab === "diagnostics" && <Diagnostics org={org} lookups={lookups} />}
-          {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} initialProblemId={openProblemId} onProblemOpened={() => setOpenProblemId(null)} />}
+          {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onNavigatePreventatives={() => setTab("preventatives")} initialProblemId={openProblemId} onProblemOpened={() => setOpenProblemId(null)} />}
           {tab === "assets" && <AssetsView org={org} lookups={lookups} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
           {tab === "vendors" && <VendorsView org={org} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
           {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onOpenProblem={(id) => { setOpenProblemId(id); setTab("problems"); }} />}
@@ -835,19 +835,6 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
         <StatCard icon={CheckCircle2} label="Resolved Today" value={resolvedToday.length} color={COLORS.teal}
           onClick={() => onNavigateIncidents({ filter: "resolved", quickFilter: null })} />
       </div>
-      <Panel title="Root cause breakdown" icon={ScanEye}>
-        {rcaData.length === 0 ? <p className="text-sm" style={{ color: COLORS.muted }}>No resolved incidents categorised yet.</p> : (
-          <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={rcaData}>
-              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
-              <XAxis dataKey="name" tick={{ fill: COLORS.faint, fontSize: 10 }} axisLine={{ stroke: COLORS.border }} />
-              <YAxis tick={{ fill: COLORS.faint, fontSize: 10 }} axisLine={false} />
-              <Tooltip contentStyle={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, borderRadius: 8 }} />
-              <Bar dataKey="count" fill={COLORS.amber} radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        )}
-      </Panel>
       <Panel title={`Open ${getTerm(org, "incidents", "incidents").toLowerCase()}`} icon={Radio}>
         <p className="text-[10px] -mt-1 mb-2" style={{ color: COLORS.faint }}>Sorted by urgency — breached first, then severity — not by when it was logged.</p>
         <div className="divide-y" style={{ borderColor: COLORS.border }}>
@@ -878,6 +865,23 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
           ))}
           {open.length === 0 && <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>}
         </div>
+      </Panel>
+      {/* Analytics, not action — moved below the actionable list. This used
+          to render first, meaning every visit meant scrolling past a chart
+          before reaching the one thing Deck actually exists to surface:
+          what needs attention right now. */}
+      <Panel title="Root cause breakdown" icon={ScanEye}>
+        {rcaData.length === 0 ? <p className="text-sm" style={{ color: COLORS.muted }}>No resolved incidents categorised yet.</p> : (
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={rcaData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.border} />
+              <XAxis dataKey="name" tick={{ fill: COLORS.faint, fontSize: 10 }} axisLine={{ stroke: COLORS.border }} />
+              <YAxis tick={{ fill: COLORS.faint, fontSize: 10 }} axisLine={false} />
+              <Tooltip contentStyle={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, borderRadius: 8 }} />
+              <Bar dataKey="count" fill={COLORS.amber} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </Panel>
     </div>
   );
@@ -3745,7 +3749,7 @@ function AssigneePanel({ incident, incidents, onChanged, showToast }) {
 // restricted to only-after-resolution — both real ServiceNow limitations
 // found in research. Any staff member can flag "this looks like a pattern"
 // the moment they suspect it, from an incident in any status.
-function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, initialProblemId, onProblemOpened }) {
+function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, onNavigatePreventatives, initialProblemId, onProblemOpened }) {
   const [problems, setProblems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [title, setTitle] = useState("");
@@ -3814,7 +3818,7 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, init
       status: "done", closed_at: problem.resolved_at || new Date().toISOString(),
     });
     if (error) { showToast(error.message); return; }
-    showToast("Logged as a preventative action — check the Preventatives tab");
+    showToast("Logged as a preventative action");
     setLinkedPreventative({ id: "new" });
   }
 
@@ -3847,7 +3851,14 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, init
             </div>
           )}
           {linkedPreventative && (
-            <p className="text-[11px] mt-2" style={{ color: COLORS.faint }}>Logged as a preventative action — its effectiveness will show in the Preventatives tab.</p>
+            // Previously just a passive line telling someone to go find it
+            // themselves in a different tab — the actual gap between
+            // Problems and Preventatives wasn't that the data wasn't
+            // linked, it's that logging one never actually took you to it.
+            <div className="flex items-center justify-between gap-2 mt-2 p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+              <span className="text-[11px]" style={{ color: COLORS.muted }}>Logged as a preventative action.</span>
+              <button onClick={onNavigatePreventatives} className="text-xs font-semibold shrink-0" style={{ color: COLORS.teal }}>View in Preventatives →</button>
+            </div>
           )}
         </Panel>
 
