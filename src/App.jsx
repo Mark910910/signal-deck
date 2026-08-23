@@ -7,7 +7,7 @@ import {
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
 import { supabase } from "./supabaseClient.js";
 import { redactPII } from "./lib/redact.js";
-import { askAI } from "./lib/ai.js";
+import { askAI, isAiUnavailable } from "./lib/ai.js";
 import WarRoomView from "./WarRoom.jsx";
 
 const COLORS = {
@@ -1614,6 +1614,24 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
   const [resolutionClass, setResolutionClass] = useState(incident.resolution_class || "");
   const [aiLoading, setAiLoading] = useState("");
 
+  // Whether a War Room already exists for this incident, independent of its
+  // CURRENT severity/resolved state. Found live: the button was gated only
+  // on `severity === "Critical" && !resolved`, so downgrading severity
+  // mid-incident (routine — an initial guess walked back once scope is
+  // understood) or simply resolving the incident removed the only way back
+  // into a room people were actively relying on, with no fallback. This
+  // keeps the door open once a room has actually been opened, regardless
+  // of what happens to the incident afterward.
+  const [hasWarRoom, setHasWarRoom] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from("war_rooms").select("id").eq("incident_id", incident.id).maybeSingle();
+      if (!cancelled) setHasWarRoom(!!data);
+    })();
+    return () => { cancelled = true; };
+  }, [incident.id]);
+
   async function changeStatus(statusId) {
     await supabase.from("incidents").update({ status_id: statusId }).eq("id", incident.id);
     await supabase.from("incident_timeline").insert({ incident_id: incident.id, org_id: org.id, status_id: statusId, note: "Status changed" });
@@ -1684,6 +1702,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
     if (url) fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `🚨 War room: ${incident.display_id} — ${incident.title}\n${link}` }) }).catch(() => {});
     await supabase.from("escalations").insert({ incident_id: incident.id, org_id: org.id, resolver_group_id: incident.incident_assignments?.[0]?.resolver_group_id, channel: url ? "Slack/Teams" : "Internal", kind: "war_room", delivered: url ? "sent" : "simulated" });
     showToast("War room opened"); onChanged();
+    setHasWarRoom(true);
     onEnterWarRoom?.();
   }
 
@@ -1756,11 +1775,24 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
                 Acknowledge
               </button>
             )}
-            {incident.severity?.name === "Critical" && (
-              <button onClick={warRoom} className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.red + "1c", color: COLORS.red, border: `1px solid ${COLORS.red}55` }}>
-                <Zap size={14} /> Open War Room
-              </button>
-            )}
+          </div>
+        )}
+        {/* Independent of !resolved_at above and of current severity —
+            found live: gating this on both meant downgrading severity
+            mid-incident (routine once scope is better understood) or
+            simply resolving it removed the only way back into a room
+            people were actively using, with no fallback anywhere in the
+            UI. Once a room exists (hasWarRoom), the door stays open for
+            the life of the incident; a fresh one can still only be
+            started for an open Critical incident. */}
+        {(hasWarRoom || (incident.severity?.name === "Critical" && !incident.resolved_at)) && (
+          <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${COLORS.border}` }}>
+            <button onClick={warRoom} className="w-full flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-medium"
+              style={hasWarRoom
+                ? { background: COLORS.teal + "1c", color: COLORS.teal, border: `1px solid ${COLORS.teal}55` }
+                : { background: COLORS.red + "1c", color: COLORS.red, border: `1px solid ${COLORS.red}55` }}>
+              <Zap size={14} /> {hasWarRoom ? "View War Room" : "Open War Room"}
+            </button>
           </div>
         )}
 
@@ -5726,10 +5758,20 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
     if (!warRoomNarrative) return;
     setDraftingFromWarRoom(true);
     const combined = `What we know: ${warRoomNarrative.what_we_know}\nWhat we've tried: ${warRoomNarrative.what_tried}\nWhat's next: ${warRoomNarrative.whats_next}`;
-    const statement = (await askAI(
+    const rawStatement = await askAI(
       "You are an ITSM assistant. Write one concise sentence stating the problem, based on this incident's War Room narrative. Respond with only that sentence.",
       redactPII(combined)
-    )).trim();
+    );
+    // Don't drop the AI's own "unavailable" wording into a form field the
+    // user is about to save as this incident's actual RCA problem
+    // statement — found in a usability pass on the sibling War Room
+    // summarize feature, same failure shape here.
+    if (isAiUnavailable(rawStatement)) {
+      setDraftingFromWarRoom(false);
+      showToast("AI drafting isn't available right now — try again shortly, or fill this in manually.");
+      return;
+    }
+    const statement = rawStatement.trim();
     const methodResult = await askAI(
       "A user is investigating a technical incident's root cause. If the problem sounds like it has one clear, single, linear chain of causes, respond with exactly: five_whys. If several different factors could be combining (people, process, technology, environment), respond with exactly: fishbone. Respond with only that one word.",
       redactPII(combined)
