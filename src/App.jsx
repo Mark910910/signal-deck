@@ -561,7 +561,7 @@ function MainApp({ org, onOrgUpdated }) {
             onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} onNavigateSettings={() => setTab("settings")} />}
           {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} members={members} onSelect={setSelectedId} initFilter={incidentListInit} onInitConsumed={() => setIncidentListInit(null)} />}
           {tab === "incidents" && selected && (
-            <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick}
+            <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick} members={members}
               onBack={() => setSelectedId(null)} onChanged={loadIncidents} showToast={showToast} />
           )}
           {tab === "new" && (
@@ -1588,7 +1588,7 @@ function ChatIntake({ lookups, org, onCreated }) {
 }
 
 /* ============================== INCIDENT DETAIL ============================= */
-function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, showToast }) {
+function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, showToast, members }) {
   const [rcaCategoryId, setRcaCategoryId] = useState(incident.rca_category?.id || "");
   const [resolutionClass, setResolutionClass] = useState(incident.resolution_class || "");
   const [aiLoading, setAiLoading] = useState("");
@@ -1692,9 +1692,17 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
     <div className="pb-6">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back</button>
       <Panel title={incident.title} icon={AlertTriangle}>
+        {/* Status and assignee live here — in the one part of this page
+            that isn't subject to the md: two-column collapse below — not
+            just in the sidebar control further down. Below 768px width
+            (a normal unmaximized laptop window, not just mobile) the
+            sidebar renders after three entire collapsible sections of
+            content, which made two of the most-referenced fields on any
+            incident the last thing on the page instead of the first. */}
         <div className="flex items-center gap-2 flex-wrap mb-2">
           <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{incident.display_id}</span>
           <SeverityPill name={incident.severity?.name} /><StatusPill name={incident.status?.name} statusId={incident.status?.id} statuses={lookups.statuses} />
+          <AssigneeIndicator incident={incident} members={members} />
         </div>
         <p className="text-sm" style={{ color: COLORS.muted }}>{incident.notes}</p>
 
