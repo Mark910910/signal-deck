@@ -1746,6 +1746,26 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           someone glances at or occasionally updates (status, assignee,
           related assets/vendor/fields, time logged); left column holds
           the things someone is actively working through. */}
+      {/* Status and Assignee moved here from the right-hand sidebar below —
+          that sidebar is only a sidebar at >=768px; underneath that it's
+          a plain stacked column that renders after three entire
+          collapsible sections, which made the two controls someone
+          reaches for on almost every triage pass (change status, assign
+          it to someone) the last thing on the page instead of the
+          second. Same reasoning that already justified moving Escalate
+          up here — these are read *and acted on*, not just glanced at. */}
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="flex-1 rounded-xl p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
+          <div className="flex items-center gap-2 mb-3"><Activity size={15} color={COLORS.amber} /><h3 className="sd-display text-sm font-semibold">Status</h3></div>
+          <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
+            {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+        <div className="flex-1">
+          <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
+        </div>
+      </div>
+
       {/* Escalate gets its own prominent, always-open section right after
           the header — previously buried three levels deep inside a
           collapsed "Files & approval" section, genuinely poor placement
@@ -1804,14 +1824,10 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         </div>
 
         <div className="md:w-72 md:shrink-0">
-          {/* Lifecycle control cluster — current state, who's on it, how
-              it ends, read top to bottom as a natural progression. */}
-          <Panel title="Status" icon={Activity}>
-            <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
-              {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </Panel>
-          <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
+          {/* Status and Assignee used to be the first two things here —
+              moved up above Escalate so they're never behind the md:
+              collapse; this column now starts with the rest of the
+              lifecycle cluster. */}
           {!incident.resolved_at && (
             <Panel title="Resolve" icon={CheckCircle2}>
               <Field label="Root cause category">
