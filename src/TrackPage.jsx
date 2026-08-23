@@ -106,7 +106,8 @@ export default function TrackPage({ token }) {
               )}
               {showReopen && (
                 <div className="mt-2 p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
-                  <textarea value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} rows={2} placeholder="What's still wrong? (required)"
+                  <label htmlFor="reopen-reason" className="text-[11px] font-medium block mb-1" style={{ color: COLORS.faint }}>What's still wrong? (required)</label>
+                  <textarea id="reopen-reason" value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} rows={2} placeholder="Describe what's still not fixed"
                     className="w-full mb-2 px-2 py-1.5 rounded text-xs" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
                   <button onClick={reopen} disabled={reopening || !reopenReason.trim()} className="text-xs px-3 py-1.5 rounded-lg font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>
                     {reopening ? "Reopening…" : "Reopen"}
@@ -132,13 +133,14 @@ export default function TrackPage({ token }) {
               ))}
               {attachments.length === 0 && <p className="text-xs mb-1.5" style={{ color: COLORS.faint }}>None yet.</p>}
               {uploadError && <p className="text-xs mb-1.5" style={{ color: COLORS.red }}>{uploadError}</p>}
-              <label className="text-xs underline cursor-pointer" style={{ color: COLORS.amber }}>
+              <label htmlFor="attachment-input" className="text-xs underline cursor-pointer" style={{ color: COLORS.amber }}>
                 {uploading ? "Uploading…" : "Attach a photo or file (up to 10MB)"}
-                <input type="file" onChange={handleUpload} disabled={uploading} className="hidden" />
+                <input id="attachment-input" type="file" onChange={handleUpload} disabled={uploading} className="hidden" />
               </label>
             </div>
 
-            <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder="Add a message — avoid sharing ID numbers or banking details"
+            <label htmlFor="reply-message" className="text-xs font-medium block mb-1" style={{ color: COLORS.faint }}>Add a message</label>
+            <textarea id="reply-message" value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder="Avoid sharing ID numbers or banking details"
               className="w-full mb-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
             <button onClick={sendReply} disabled={sending || !reply.trim()} className="w-full py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-2" style={{ background: COLORS.amber, color: "#1A1200" }}>
               <Send size={13} /> {sending ? "Sending…" : "Send"}

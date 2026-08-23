@@ -12,7 +12,13 @@ import { askAI } from "./lib/ai.js";
 const COLORS = {
   bg: "#0A1120", surface: "#121B2E", surfaceHi: "#182338", border: "#232F47",
   amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", blue: "#6C8CFF", yellow: "#EAB308",
-  text: "#E8ECF3", muted: "#8B96AB", faint: "#5B6580",
+  // faint was #5B6580 — ~3.25:1 on bg and ~2.7:1 on surfaceHi, both under
+  // the WCAG 1.4.3 4.5:1 floor for normal text (it's used for timestamps,
+  // author lines, and reference IDs everywhere). #838EA9 clears 4.5:1 on
+  // both bg (~5.8:1) and surfaceHi (~4.8:1) while staying visibly quieter
+  // than muted (#8B96AB, ~6.3:1/~5.3:1) — same hue family, just the
+  // dimmest step that's still legible.
+  text: "#E8ECF3", muted: "#8B96AB", faint: "#838EA9",
 };
 // Medium used to share COLORS.teal with "Met SLA" / "Resolved" / "Acknowledged"
 // — a mid-severity incident and a healthy one looked the same color at a
@@ -585,6 +591,7 @@ function MainApp({ org, onOrgUpdated }) {
       {ambientFlag && (
         <AmbientFlagToast
           flag={ambientFlag}
+          org={org}
           onView={async () => {
             await recordFlagFeedback("acted");
             setSelectedId(ambientFlag.incidentId); setTab("incidents"); setAmbientFlag(null);
@@ -597,7 +604,7 @@ function MainApp({ org, onOrgUpdated }) {
 }
 
 /* --------------------------------- shared bits --------------------------------- */
-function SLABadge({ incident }) {
+function SLABadge({ incident, org }) {
   const deadline = new Date(incident.created_at).getTime() + incident.sla_minutes * 60000 + (incident.sla_paused_minutes || 0) * 60000;
   const remaining = deadline - Date.now();
   const resolved = !!incident.resolved_at;
@@ -608,7 +615,7 @@ function SLABadge({ incident }) {
   return (
     <div className="flex items-center gap-1.5 sd-mono text-[11px]" style={{ color }}>
       <Clock size={12} />
-      {resolved ? (breached ? "Breached" : "Met SLA") : (breached ? `Overdue ${fmtDuration(-remaining)}` : fmtClock(remaining))}
+      {resolved ? (breached ? "Breached" : `Met ${getTerm(org, "sla", "SLA")}`) : (breached ? `Overdue ${fmtDuration(-remaining)}` : fmtClock(remaining))}
     </div>
   );
 }
@@ -739,7 +746,7 @@ function Deck({ incidents, lookups, org, tick, onOpen, onNavigateIncidents, onNa
                 </div>
                 <div className="text-sm truncate">{inc.title}</div>
               </div>
-              <SLABadge incident={inc} />
+              <SLABadge incident={inc} org={org} />
             </button>
           ))}
           {open.length === 0 && <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>}
@@ -827,7 +834,16 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
   // hard to see who's working on what" without recreating Jira/ServiceNow's
   // notification sprawl where everyone gets CC'd on everything regardless.
   const [scope, setScope] = useState(org?.myResolverGroupId ? "mine" : "all");
-  const [quickFilter, setQuickFilter] = useState(null); // 'mine' | 'unassigned' | 'overdue' | null
+  // An array of independently-toggleable quick filters rather than a single
+  // value — previously "Assigned to me" and "Overdue" were mutually
+  // exclusive, so combining "my overdue incidents" meant dropping into the
+  // full condition builder for something Jira handles as two clickable
+  // chips. Kept as a plain array (not a Set) since it round-trips through
+  // saved_views' filter_json as JSON either way, and array is simpler there.
+  const [quickFilters, setQuickFilters] = useState([]);
+  function toggleQuickFilter(val) {
+    setQuickFilters((prev) => prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]);
+  }
   const [conditions, setConditions] = useState([]);
   const [showBuilder, setShowBuilder] = useState(false);
   const [savedViews, setSavedViews] = useState([]);
@@ -839,7 +855,9 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
   useEffect(() => {
     if (initFilter) {
       setFilter(initFilter.filter);
-      setQuickFilter(initFilter.quickFilter);
+      // Deck still passes a single value or null (e.g. quickFilter: "overdue")
+      // — normalize it into the array shape this list now uses internally.
+      setQuickFilters(initFilter.quickFilter ? [initFilter.quickFilter] : []);
       onInitConsumed?.();
     }
   }, [initFilter, onInitConsumed]);
@@ -862,14 +880,17 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
 
   // Quick filters — the "based on role" cases covered with one click,
   // mirroring Jira's most popular JQL pattern (assignee = currentUser())
-  // without needing to know any query syntax at all.
-  if (quickFilter === "mine" && org?.myUserId) {
+  // without needing to know any query syntax at all. Each one is applied
+  // independently (AND'd together like everything else in this list) so
+  // "assigned to me" + "overdue" can be combined instead of forcing a
+  // choice between them.
+  if (quickFilters.includes("mine") && org?.myUserId) {
     list = list.filter((i) => (i.incident_assignments || []).some((a) => a.assigned_user_id === org.myUserId));
   }
-  if (quickFilter === "unassigned") {
+  if (quickFilters.includes("unassigned")) {
     list = list.filter((i) => !(i.incident_assignments || []).some((a) => a.assigned_user_id));
   }
-  if (quickFilter === "overdue") {
+  if (quickFilters.includes("overdue")) {
     list = list.filter((i) => !i.resolved_at && new Date(i.created_at).getTime() + i.sla_minutes * 60000 < Date.now());
   }
 
@@ -903,6 +924,23 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
     );
   }
 
+  // Default sort was just the raw created_at DESC this list inherited from
+  // MainApp's fetch — a breached Critical incident could sit buried under
+  // newer, lower-risk ones with no way to notice without opening each row.
+  // Same principle Deck already applies to its own "Open incidents" feed
+  // (sort by severity.business_weight desc), extended here with breach
+  // status as the primary key: an incident that's already blown its SLA
+  // is a bigger fire than one that's merely high severity but still on
+  // track, so it belongs above it. There's no separate explicit sort
+  // control to preserve — search/quick-filters/condition builder still
+  // narrow which rows appear, this only changes the order of what's left.
+  list = [...list].sort((a, b) => {
+    const aBreached = !a.resolved_at && new Date(a.created_at).getTime() + a.sla_minutes * 60000 < Date.now();
+    const bBreached = !b.resolved_at && new Date(b.created_at).getTime() + b.sla_minutes * 60000 < Date.now();
+    if (aBreached !== bBreached) return aBreached ? -1 : 1;
+    return (b.severity?.business_weight || 0) - (a.severity?.business_weight || 0);
+  });
+
   function addCondition() {
     const first = fieldDefs[0];
     setConditions((prev) => [...prev, { field: first.key, operator: first.type === "date" ? "last_n_days" : "is", value: first.type === "date" ? "30" : (first.options?.[0] || "") }]);
@@ -916,13 +954,17 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
 
   async function saveView() {
     if (!viewName.trim()) return;
-    await supabase.from("saved_views").insert({ org_id: org.id, name: viewName, filter_json: { filter, scope, quickFilter, conditions } });
+    await supabase.from("saved_views").insert({ org_id: org.id, name: viewName, filter_json: { filter, scope, quickFilters, conditions } });
     setViewName("");
     await loadViews();
   }
   function applyView(v) {
     const f = v.filter_json;
-    setFilter(f.filter ?? "open"); setScope(f.scope ?? "all"); setQuickFilter(f.quickFilter ?? null); setConditions(f.conditions ?? []);
+    setFilter(f.filter ?? "open"); setScope(f.scope ?? "all");
+    // Older saved views stored a single quickFilter string (or null) — accept
+    // either shape so views saved before this change still apply cleanly.
+    setQuickFilters(f.quickFilters ?? (f.quickFilter ? [f.quickFilter] : []));
+    setConditions(f.conditions ?? []);
   }
   async function deleteView(id) {
     await supabase.from("saved_views").delete().eq("id", id);
@@ -948,11 +990,13 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
         </div>
       )}
 
-      {/* Quick filters — one click, no query-building knowledge needed at all */}
+      {/* Quick filters — one click, no query-building knowledge needed at all.
+          Independently toggleable so e.g. "Assigned to me" + "Overdue" can be
+          combined instead of forcing a choice between them. */}
       <div className="flex flex-wrap gap-1.5 mb-3">
         {[["mine", "Assigned to me"], ["unassigned", "Unassigned"], ["overdue", "Overdue"]].map(([val, label]) => (
-          <button key={val} onClick={() => setQuickFilter(quickFilter === val ? null : val)} className="px-3 py-1.5 rounded-full text-xs font-medium"
-            style={{ background: quickFilter === val ? COLORS.amber + "22" : COLORS.surface, color: quickFilter === val ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
+          <button key={val} onClick={() => toggleQuickFilter(val)} className="px-3 py-1.5 rounded-full text-xs font-medium"
+            style={{ background: quickFilters.includes(val) ? COLORS.amber + "22" : COLORS.surface, color: quickFilters.includes(val) ? COLORS.amber : COLORS.muted, border: `1px solid ${COLORS.border}` }}>
             {label}
           </button>
         ))}
@@ -1064,7 +1108,7 @@ function IncidentList({ incidents, lookups, org, tick, onSelect, initFilter, onI
               <div className="text-sm font-medium truncate">{inc.title}</div>
               <div className="text-[11px] mt-0.5" style={{ color: COLORS.muted }}>{inc.category?.name} · via {inc.source}{inc.rca_category?.name ? ` · ${inc.rca_category.name}` : ""}</div>
             </div>
-            <SLABadge incident={inc} />
+            <SLABadge incident={inc} org={org} />
           </button>
         ))}
         {list.length === 0 && <div className="p-8 text-center text-sm" style={{ color: COLORS.muted }}>No {getTerm(org, "incidents", "incidents").toLowerCase()} match.</div>}
@@ -1105,7 +1149,10 @@ async function insertIncident({ title, notes, categoryId, severityId, slaMinutes
   }));
   if (assignments.length) await supabase.from("incident_assignments").insert(assignments);
 
-  await supabase.from("incident_timeline").insert({ incident_id: inc.id, org_id: org.id, status_id: statusRow?.id, note: "Incident logged" });
+  // Built with getTerm rather than a hardcoded "Incident" — timeline notes
+  // are stored text, so a renamed org would otherwise see the un-overridable
+  // English word baked into every historical row going forward from here.
+  await supabase.from("incident_timeline").insert({ incident_id: inc.id, org_id: org.id, status_id: statusRow?.id, note: `${getTerm(org, "incident", "Incident")} logged` });
 
   if (identity && org.identity_module_enabled && (identity.customerName || identity.customerContact)) {
     await supabase.from("incident_identity").insert({
@@ -1139,6 +1186,14 @@ function IncidentForm({ lookups, org, onCreated }) {
   const [consent, setConsent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [warn, setWarn] = useState(false);
+  // Previously a blank required custom field just silently returned from
+  // submit() with setWarn(false) — no message, no highlight, button still
+  // enabled — so someone could click Log Incident repeatedly with no
+  // feedback at all about why nothing happened. Tracks which field was
+  // missing so the error can name it specifically and highlight that exact
+  // field, the same red-border treatment the identity-consent checkbox
+  // already gets.
+  const [missingFieldId, setMissingFieldId] = useState(null);
   const [customValues, setCustomValues] = useState({});
   const [recordType, setRecordType] = useState("incident");
   const [catalogItemId, setCatalogItemId] = useState("");
@@ -1194,7 +1249,8 @@ function IncidentForm({ lookups, org, onCreated }) {
     if (!title.trim() || !categoryId || !severityId) return;
     if (org.identity_module_enabled && hasContact && !consent) { setWarn(true); return; }
     const missingRequired = (lookups.customFields || []).find((f) => f.required && !customValues[f.id]);
-    if (missingRequired) { setWarn(false); return; }
+    if (missingRequired) { setMissingFieldId(missingRequired.id); return; }
+    setMissingFieldId(null);
     setSaving(true);
     const sev = lookups.severities.find((s) => s.id === severityId);
     try {
@@ -1251,7 +1307,7 @@ function IncidentForm({ lookups, org, onCreated }) {
           </select>
         </Field>
       </div>
-      <Field label="Resolver group(s) — select one or more">
+      <Field label={`${getTerm(org, "resolver_groups", "Resolver groups")} — select one or more`}>
         <div className="flex flex-wrap gap-1.5">
           {lookups.resolverGroups.map((g) => (
             <button key={g.id} type="button" onClick={() => toggleGroup(g.id)} className="text-xs px-2.5 py-1 rounded-full"
@@ -1284,9 +1340,16 @@ function IncidentForm({ lookups, org, onCreated }) {
       {(lookups.customFields || []).length > 0 && (
         <div className="mb-1">
           {lookups.customFields.map((f) => (
-            <CustomFieldInput key={f.id} field={f} value={customValues[f.id] || ""} onChange={(v) => setCustomValue(f.id, v)} />
+            <CustomFieldInput key={f.id} field={f} value={customValues[f.id] || ""}
+              onChange={(v) => { setCustomValue(f.id, v); if (missingFieldId === f.id) setMissingFieldId(null); }}
+              error={missingFieldId === f.id} />
           ))}
         </div>
+      )}
+      {missingFieldId && (
+        <p className="text-[11px] mb-2" style={{ color: COLORS.red }}>
+          Please fill in "{lookups.customFields.find((f) => f.id === missingFieldId)?.label}" before logging this {getTerm(org, "incident", "incident").toLowerCase()}.
+        </p>
       )}
       <button onClick={submit} disabled={saving || !title.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm mt-1" style={{ background: COLORS.amber, color: "#1A1200" }}>
         {saving ? "Logging…" : `Log ${getTerm(org, "incident", "Incident")}`}
@@ -1390,8 +1453,8 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
     await supabase.from("incidents").update({
       resolved_at: new Date().toISOString(), rca_category_id: rcaCategoryId || null, resolution_class: resolutionClass, status_id: resolvedStatus.id,
     }).eq("id", incident.id);
-    await supabase.from("incident_timeline").insert({ incident_id: incident.id, org_id: org.id, status_id: resolvedStatus.id, note: "Incident resolved" });
-    showToast("Incident resolved"); onChanged();
+    await supabase.from("incident_timeline").insert({ incident_id: incident.id, org_id: org.id, status_id: resolvedStatus.id, note: `${getTerm(org, "incident", "Incident")} resolved` });
+    showToast(`${getTerm(org, "incident", "Incident")} resolved`); onChanged();
   }
 
   async function acknowledge() {
@@ -1468,7 +1531,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         {/* SLA status — its own visually separated block, not stacked
             directly under the description with no breathing room. */}
         <div className="mt-3 pt-3 flex flex-col gap-1" style={{ borderTop: `1px solid ${COLORS.border}` }}>
-          <SLABadge incident={incident} />
+          <SLABadge incident={incident} org={org} />
           <FirstResponseBadge incident={incident} lookups={lookups} />
         </div>
 
@@ -1532,7 +1595,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
 
             <RCAAnalysisPanel incident={incident} org={org} lookups={lookups} onCategorySuggested={setRcaCategoryId} showToast={showToast} />
 
-            <RiskSignalsPanel incident={incident} />
+            <RiskSignalsPanel incident={incident} org={org} />
           </CollapsibleSection>
 
           <CollapsibleSection title="Activity" icon={MessageSquare} defaultOpen={sectionDefaultOpen(org, "activity", true)}>
@@ -1870,7 +1933,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
       <div id="settings-people">
       <CollapsibleSection title="People" icon={Users} defaultOpen={false}>
-        <Panel title="Resolver groups" icon={Users}>
+        <Panel title={getTerm(org, "resolver_groups", "Resolver groups")} icon={Users}>
           {lookups.resolverGroups.map((g) => (
             <div key={g.id} className="flex items-center justify-between text-sm py-1">{g.name}<button onClick={() => removeItem("resolver_groups", g.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
           ))}
@@ -1901,9 +1964,9 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
           <div className="flex gap-2 mt-2"><input value={newRca} onChange={(e) => setNewRca(e.target.value)} className="sd-in5 flex-1" placeholder="New RCA category" /><button onClick={addRca} className="sd-btn-p6">Add</button></div>
         </Panel>
 
-        <Panel title="Severity, SLA & business impact" icon={Clock}>
+        <Panel title={`Severity, ${getTerm(org, "sla", "SLA")} & business impact`} icon={Clock}>
           <div className="grid grid-cols-[auto_1fr_1fr] gap-2 mb-1.5 text-[10px]" style={{ color: COLORS.faint }}>
-            <span></span><span>SLA (minutes)</span><span>Business weight (1-5)</span>
+            <span></span><span>{getTerm(org, "sla", "SLA")} (minutes)</span><span>Business weight (1-5)</span>
           </div>
           {lookups.severities.map((s) => (
             <div key={s.id} className="grid grid-cols-[auto_1fr_1fr] gap-2 items-center mb-2">
@@ -1912,7 +1975,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
               <input type="number" min="1" max="5" defaultValue={s.business_weight} onBlur={(e) => updateWeight(s.id, +e.target.value)} className="sd-in5" />
             </div>
           ))}
-          <p className="text-[11px] mt-1" style={{ color: COLORS.faint }}>Business weight doesn't change the SLA clock — it's used to sort the dashboard by revenue risk, not just severity label.</p>
+          <p className="text-[11px] mt-1" style={{ color: COLORS.faint }}>Business weight doesn't change the {getTerm(org, "sla", "SLA")} clock — it's used to sort the dashboard by revenue risk, not just severity label.</p>
         </Panel>
 
         {isModuleEnabled(org, "sla_policies") && <SLAPoliciesPanel org={org} lookups={lookups} onLookupsChanged={onLookupsChanged} showToast={showToast} />}
@@ -1944,8 +2007,8 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
       <div id="settings-data">
       <CollapsibleSection title="Data & integrations" icon={Download} defaultOpen={false}>
         <Panel title="Reporting" icon={Download}>
-          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>One-click export of every incident's SLA status, category, and root cause — no manual filtering.</p>
-          <button onClick={exportSlaReport} className="sd-btn-p6 flex items-center gap-1.5"><Download size={13} /> Export SLA report (CSV)</button>
+          <p className="text-sm mb-3" style={{ color: COLORS.muted }}>One-click export of every incident's {getTerm(org, "sla", "SLA")} status, category, and root cause — no manual filtering.</p>
+          <button onClick={exportSlaReport} className="sd-btn-p6 flex items-center gap-1.5"><Download size={13} /> Export {getTerm(org, "sla", "SLA")} report (CSV)</button>
         </Panel>
 
         <IntegrationsPanel org={org} showToast={showToast} />
@@ -1969,10 +2032,10 @@ function Diagnostics({ org, lookups }) {
 
     checks.push({ label: "Signed in", ok: true, detail: "Session active" });
     checks.push({ label: "Organisation loaded", ok: !!org?.id, detail: org?.name || "No organisation found" });
-    checks.push({ label: "Resolver groups configured", ok: lookups.resolverGroups.length > 0, detail: `${lookups.resolverGroups.length} group(s)` });
+    checks.push({ label: `${getTerm(org, "resolver_groups", "Resolver groups")} configured`, ok: lookups.resolverGroups.length > 0, detail: `${lookups.resolverGroups.length} group(s)` });
     checks.push({ label: "Categories configured", ok: lookups.categories.length > 0, detail: `${lookups.categories.length} categor${lookups.categories.length === 1 ? "y" : "ies"}` });
     checks.push({ label: "Statuses configured", ok: lookups.statuses.length > 0, detail: `${lookups.statuses.length} status(es)` });
-    checks.push({ label: "Severities & SLA configured", ok: lookups.severities.length > 0, detail: `${lookups.severities.length} severity level(s)` });
+    checks.push({ label: `Severities & ${getTerm(org, "sla", "SLA")} configured`, ok: lookups.severities.length > 0, detail: `${lookups.severities.length} severity level(s)` });
     checks.push({ label: "Root cause taxonomy configured", ok: lookups.rcaCategories.length > 0, detail: `${lookups.rcaCategories.length} categor${lookups.rcaCategories.length === 1 ? "y" : "ies"}` });
 
     try {
@@ -2353,7 +2416,7 @@ function TeamAssignmentPanel({ org, lookups, showToast }) {
   return (
     <Panel title="Team assignment" icon={Users}>
       <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
-        Which resolver group each person is on, and their WhatsApp number for escalation (optional — only needed if a WhatsApp escalation policy is used, and each per-message send has a small real cost, disclosed where policies are configured).
+        Which {getTerm(org, "resolver_group", "resolver group").toLowerCase()} each person is on, and their WhatsApp number for escalation (optional — only needed if a WhatsApp escalation policy is used, and each per-message send has a small real cost, disclosed where policies are configured).
       </p>
       <div className="space-y-2">
         {members.map((m) => (
@@ -2630,8 +2693,12 @@ function computeChartData(chart, incidents) {
   return rows;
 }
 
-const METRIC_LABELS = { count: "Number of incidents", avg_resolution_hours: "Average resolution time (hours)", breach_rate: "SLA breach rate (%)" };
-const GROUP_LABELS = { category: "Category", severity: "Severity", status: "Status", rca_category: "Root cause", resolver_group: "Resolver group", source: "Source", month: "Month", week: "Week" };
+// Functions rather than plain constants — both "SLA" and "Resolver group"
+// are overridable terms, and these labels are rendered in components that
+// already have org in scope, so the override should show up here too
+// instead of only in the places that happened to call getTerm directly.
+const metricLabels = (org) => ({ count: "Number of incidents", avg_resolution_hours: "Average resolution time (hours)", breach_rate: `${getTerm(org, "sla", "SLA")} breach rate (%)` });
+const groupLabels = (org) => ({ category: "Category", severity: "Severity", status: "Status", rca_category: "Root cause", resolver_group: getTerm(org, "resolver_group", "Resolver group"), source: "Source", month: "Month", week: "Week" });
 
 function ChartRenderer({ chart, incidents, height = 220 }) {
   const data = useMemo(() => computeChartData(chart, incidents), [chart, incidents]);
@@ -2728,13 +2795,13 @@ function ChartBuilderForm({ org, lookups, incidents, onSaved, onCancel, editingC
         </Field>
         <Field label="Measure">
           <select value={metric} onChange={(e) => setMetric(e.target.value)} className="sd-in5">
-            {Object.entries(METRIC_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            {Object.entries(metricLabels(org)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
         </Field>
       </div>
       <Field label="Group by">
         <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className="sd-in5">
-          {Object.entries(GROUP_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {Object.entries(groupLabels(org)).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </Field>
       <div className="grid grid-cols-2 gap-3">
@@ -2924,7 +2991,7 @@ function CustomDashboards({ org, lookups, incidents, showToast }) {
             <div key={c.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
               <div>
                 <div style={{ color: COLORS.text }}>{c.name}</div>
-                <div className="text-[11px]" style={{ color: COLORS.faint }}>{c.chart_type} · {METRIC_LABELS[c.metric]} by {GROUP_LABELS[c.group_by]}</div>
+                <div className="text-[11px]" style={{ color: COLORS.faint }}>{c.chart_type} · {metricLabels(org)[c.metric]} by {groupLabels(org)[c.group_by]}</div>
               </div>
               <div className="flex gap-2">
                 <button onClick={() => { setEditingChart(c); setShowBuilder(true); }} className="text-xs" style={{ color: COLORS.amber }}>Edit</button>
@@ -3129,17 +3196,21 @@ function OnCallPanel({ org, lookups, showToast }) {
 /* ============================== CUSTOM FIELD INPUT ============================ */
 // Shared rendering for a custom field, used both at incident creation and in
 // the incident detail view — one place that knows how to render each type.
-function CustomFieldInput({ field, value, onChange }) {
+function CustomFieldInput({ field, value, onChange, error }) {
+  // Same red-border-on-error treatment already used for the identity-consent
+  // checkbox — this is the field-level half of the "which field is missing"
+  // fix, paired with the named inline message rendered above the submit button.
+  const errorStyle = error ? { borderColor: COLORS.red } : undefined;
   return (
     <Field label={field.label + (field.required ? " *" : "")}>
-      {field.field_type === "text" && <input value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" />}
-      {field.field_type === "number" && <input type="number" value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" />}
-      {field.field_type === "date" && <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" />}
+      {field.field_type === "text" && <input value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" style={errorStyle} />}
+      {field.field_type === "number" && <input type="number" value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" style={errorStyle} />}
+      {field.field_type === "date" && <input type="date" value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" style={errorStyle} />}
       {field.field_type === "checkbox" && (
         <input type="checkbox" checked={value === "true"} onChange={(e) => onChange(e.target.checked ? "true" : "false")} />
       )}
       {field.field_type === "select" && (
-        <select value={value} onChange={(e) => onChange(e.target.value)} className="sd-in">
+        <select value={value} onChange={(e) => onChange(e.target.value)} className="sd-in" style={errorStyle}>
           <option value="">Choose…</option>
           {(field.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
         </select>
@@ -4411,7 +4482,7 @@ function SLAPoliciesPanel({ org, lookups, onLookupsChanged, showToast }) {
       category_id: categoryId || null, severity_id: severityId || null,
     });
     setName(""); setTargetMinutes(30); setCategoryId(""); setSeverityId("");
-    showToast("SLA policy added");
+    showToast(`${getTerm(org, "sla", "SLA")} policy added`);
     await onLookupsChanged();
   }
   async function togglePolicy(p) {
@@ -4424,7 +4495,7 @@ function SLAPoliciesPanel({ org, lookups, onLookupsChanged, showToast }) {
   }
 
   return (
-    <Panel title="SLA policies" icon={Clock}>
+    <Panel title={`${getTerm(org, "sla", "SLA")} policies`} icon={Clock}>
       <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
         Separate targets for first response and resolution, by category and severity if you need it. Simple dropdowns — no scripted conditions, no calendar to misconfigure. Most specific match wins.
       </p>
@@ -4445,7 +4516,7 @@ function SLAPoliciesPanel({ org, lookups, onLookupsChanged, showToast }) {
             </div>
           </div>
         ))}
-        {(lookups.slaPolicies || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No custom SLA policies yet — incidents still use the default resolution SLA set on each severity.</p>}
+        {(lookups.slaPolicies || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No custom {getTerm(org, "sla", "SLA").toLowerCase()} policies yet — incidents still use the default resolution {getTerm(org, "sla", "SLA").toLowerCase()} set on each severity.</p>}
       </div>
       <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Critical first response" className="sd-in5" /></Field>
       <div className="grid grid-cols-2 gap-3">
@@ -4789,12 +4860,15 @@ function VendorSettingsPanel({ org, onOrgUpdated, showToast }) {
 // toggles and terminology both layer over the template's defaults,
 // org's own choice always wins, matching effective_terminology() and
 // isModuleEnabled() exactly.
-const ALL_MODULES = [
+// A function so the "sla_policies" row can reflect an org's own SLA
+// terminology override the same as everywhere else it appears, instead of
+// being the one remaining hardcoded spot.
+const allModules = (org) => [
   { key: "problems", label: "Problems" },
   { key: "cmdb", label: "Assets (CMDB)" },
   { key: "on_call", label: "On-call & escalation" },
   { key: "service_catalog", label: "Service catalog" },
-  { key: "sla_policies", label: "Custom SLA policies" },
+  { key: "sla_policies", label: `Custom ${getTerm(org, "sla", "SLA")} policies` },
   { key: "vendors", label: "Vendors" },
 ];
 const TERM_KEYS = [
@@ -4802,6 +4876,11 @@ const TERM_KEYS = [
   { key: "incidents", label: "\"Incidents\" (plural)" },
   { key: "resolver_group", label: "\"Resolver group\" (singular)" },
   { key: "resolver_groups", label: "\"Resolver groups\" (plural)" },
+  // "SLA" is arguably the densest piece of unexplained ITSM jargon in the
+  // whole product — every incident row/card, several Settings panel
+  // titles, and the CSV export show it with no context. Same jsonb column,
+  // no schema change, just one more overridable key wired through getTerm().
+  { key: "sla", label: "\"SLA\" (e.g. \"Response time\", \"Turnaround\")" },
 ];
 
 function TemplateSettingsPanel({ org, onOrgUpdated, showToast }) {
@@ -4828,7 +4907,7 @@ function TemplateSettingsPanel({ org, onOrgUpdated, showToast }) {
 
       <div className="text-xs font-semibold mb-2" style={{ color: COLORS.faint }}>MODULES</div>
       <div className="space-y-1.5 mb-4">
-        {ALL_MODULES.map((m) => {
+        {allModules(org).map((m) => {
           const enabled = moduleOverrides[m.key] !== undefined ? moduleOverrides[m.key] : isModuleEnabled(org, m.key);
           return (
             <label key={m.key} className="flex items-center justify-between text-sm p-2 rounded-lg cursor-pointer" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
@@ -4846,7 +4925,7 @@ function TemplateSettingsPanel({ org, onOrgUpdated, showToast }) {
             <input
               value={termOverrides[t.key] !== undefined ? termOverrides[t.key] : (org.business_templates?.terminology?.[t.key] || "")}
               onChange={(e) => setTermOverrides((prev) => ({ ...prev, [t.key]: e.target.value }))}
-              placeholder={t.key.includes("resolver_group") ? "Resolver group" : "Incident"}
+              placeholder={t.key.includes("resolver_group") ? "Resolver group" : t.key === "sla" ? "SLA" : "Incident"}
               className="sd-in5"
             />
           </Field>
@@ -4991,7 +5070,7 @@ function CSITrendsPanel({ org, lookups }) {
 // is the one genuinely AI-dependent piece, so it stays click-triggered,
 // exactly like the existing "Ask AI" mitigation/RCA buttons — never
 // automatic, never silent.
-function RiskSignalsPanel({ incident }) {
+function RiskSignalsPanel({ incident, org }) {
   const [comments, setComments] = useState([]);
   const [sentiment, setSentiment] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
@@ -5021,7 +5100,7 @@ function RiskSignalsPanel({ incident }) {
   const sentimentColor = { Frustrated: COLORS.red, Neutral: COLORS.muted, Satisfied: COLORS.teal };
 
   return (
-    <Panel title="Risk signals — for you to weigh, nothing here changes the SLA automatically" icon={AlertTriangle}>
+    <Panel title={`Risk signals — for you to weigh, nothing here changes the ${getTerm(org, "sla", "SLA")} automatically`} icon={AlertTriangle}>
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div className="p-2.5 rounded-lg text-center" style={{ background: COLORS.surfaceHi, border: `1px solid ${reopenCount > 0 ? COLORS.amber + "55" : COLORS.border}` }}>
           <div className="sd-display text-xl font-semibold" style={{ color: reopenCount > 0 ? COLORS.amber : COLORS.text }}>{reopenCount}</div>
@@ -5156,12 +5235,27 @@ function QuoteRequestsPanel({ org, vendors, onOpenIncident, showToast }) {
 
 function QuoteRequestDetail({ request, org, onBack, onChanged, onOpenIncident, showToast }) {
   const [responses, setResponses] = useState([]);
+  const [copiedVendorId, setCopiedVendorId] = useState(null);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("quote_request_vendors").select("*, vendors(name)").eq("quote_request_id", request.id).order("quoted_price", { ascending: true, nullsFirst: false });
     setResponses(data || []);
   }, [request.id]);
   useEffect(() => { load(); }, [load]);
+
+  // The token was previously only ever used once, to build the emailed
+  // link at creation time, then never surfaced again — if that email never
+  // arrived (spam filter, typo, whatever), staff had no way to get the
+  // vendor a working link short of re-sending the whole quote request.
+  // The token already lives in the row this panel already queries, so this
+  // is just exposing it, same pattern as the customer portal's "Copy" link.
+  function copyVendorLink(r) {
+    const link = `${window.location.origin}/quote/${r.token}`;
+    navigator.clipboard?.writeText(link);
+    setCopiedVendorId(r.id);
+    showToast("Quote link copied");
+    setTimeout(() => setCopiedVendorId((id) => (id === r.id ? null : id)), 1800);
+  }
 
   async function award(vendorId) {
     await supabase.from("quote_requests").update({ status: "awarded", awarded_vendor_id: vendorId }).eq("id", request.id);
@@ -5200,6 +5294,11 @@ function QuoteRequestDetail({ request, org, onBack, onChanged, onOpenIncident, s
                   <span className="text-[11px]" style={{ color: COLORS.faint }}>No response yet</span>
                 )}
               </div>
+              {r.quoted_price == null && r.token && (
+                <button onClick={() => copyVendorLink(r)} className="text-[11px] underline mt-1 flex items-center gap-1" style={{ color: COLORS.blue }}>
+                  <Copy size={11} /> {copiedVendorId === r.id ? "Copied" : "Copy quote link — in case the invite email never arrived"}
+                </button>
+              )}
               {r.notes && <p className="text-xs mt-1" style={{ color: COLORS.muted }}>{r.notes}</p>}
               {r.valid_until && <p className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>Valid until {r.valid_until}</p>}
               {r.quoted_price != null && request.status !== "awarded" && (
@@ -5602,7 +5701,7 @@ function KBArticlesPanel({ org, showToast }) {
 // which tab someone's on. Distinct from the generic toast: this one
 // needs a real action (View) versus a real non-action (auto-dismiss),
 // since that distinction is what feeds the feedback-adjusted flagging.
-function AmbientFlagToast({ flag, onView, onDismiss }) {
+function AmbientFlagToast({ flag, org, onView, onDismiss }) {
   useEffect(() => {
     const t = setTimeout(() => onDismiss(), 12000); // Auto-dismiss counts as "dismissed" — a real signal, not lost.
     return () => clearTimeout(t);
@@ -5624,7 +5723,7 @@ function AmbientFlagToast({ flag, onView, onDismiss }) {
           <div className="flex items-center gap-1.5 mb-1">
             <AlertTriangle size={12} color={color} />
             <span className="text-[11px] font-semibold tracking-wide" style={{ color }}>
-              {isBreaching ? "JUST BREACHED SLA" : "MIGHT BE READY TO CLOSE"}
+              {isBreaching ? `JUST BREACHED ${getTerm(org, "sla", "SLA")}` : "MIGHT BE READY TO CLOSE"}
             </span>
           </div>
           <p className="text-sm mb-2.5 truncate" style={{ color: COLORS.text }}>{flag.displayId} — {flag.title}</p>

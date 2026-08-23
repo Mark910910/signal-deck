@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Anchor, Send, CheckCircle2, ThumbsUp, ThumbsDown } from "lucide-react";
 import { supabase } from "./supabaseClient.js";
 
@@ -30,34 +30,54 @@ export default function PortalPage({ slug }) {
   const [copied, setCopied] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [feedbackGiven, setFeedbackGiven] = useState({});
+  const shownRef = useRef(new Set());
 
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase.rpc("portal_categories", { slug });
       if (error) { setError("This link doesn't look right — please check it with whoever gave it to you."); return; }
       setCategories(data || []);
-      if (data?.[0]) setCategory(data[0].name);
+      // Previously auto-selected data[0].name — whatever sorted first
+      // alphabetically got silently chosen for the customer, with no
+      // indication a choice had even been made and no guidance on what any
+      // category meant. Left blank now: category stays unset until someone
+      // actively picks one, same as a required <select> with no default.
     })();
   }, [slug]);
 
   // Debounced search-as-you-type — waits for a pause in typing rather
-  // than firing on every keystroke.
+  // than firing on every keystroke. Lowered from 4 to 2 characters so short
+  // real-world queries ("VPN", "POS", "Wi-Fi") still get suggestions.
   useEffect(() => {
-    if (!title.trim() || title.trim().length < 4) { setSuggestions([]); return; }
+    if (!title.trim() || title.trim().length < 2) { setSuggestions([]); return; }
     const timer = setTimeout(async () => {
       const { data } = await supabase.rpc("search_kb_articles", { slug, search_query: title });
       setSuggestions(data || []);
+      // "Shown" is recorded here, separately from log_kb_feedback — the
+      // real deflection success case is a customer reading this and simply
+      // not submitting, which a feedback-click-only count could never see.
+      // shownRef guards against re-counting the same article on every
+      // keystroke while it stays in the results.
+      (data || []).forEach((s) => {
+        if (!shownRef.current.has(s.id)) {
+          shownRef.current.add(s.id);
+          supabase.rpc("record_kb_shown", { article_id: s.id });
+        }
+      });
     }, 500);
     return () => clearTimeout(timer);
   }, [title, slug]);
 
   async function giveFeedback(articleId, helpful) {
     await supabase.rpc("log_kb_feedback", { article_id: articleId, was_helpful: helpful });
-    setFeedbackGiven((prev) => ({ ...prev, [articleId]: true }));
+    // Track which way they voted, not just that they voted — a 👍 should
+    // read as case-closed ("Glad that helped!"), not the same "still need
+    // help? submit below" copy that assumes the opposite.
+    setFeedbackGiven((prev) => ({ ...prev, [articleId]: helpful ? "up" : "down" }));
   }
 
   async function submit() {
-    if (!title.trim()) return;
+    if (!title.trim() || !category) return;
     setSubmitting(true); setError("");
     const { data, error } = await supabase.rpc("submit_via_portal", {
       slug, incident_title: title, incident_notes: notes, category_name: category,
@@ -104,8 +124,8 @@ export default function PortalPage({ slug }) {
         </div>
         <p className="text-xs mb-4" style={{ color: COLORS.muted }}>No account needed. Please don't include your name, ID number, or contact details in the description below — just describe the problem.</p>
 
-        <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>What's wrong?</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary" className="w-full mb-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+        <label htmlFor="portal-title" className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>What's wrong?</label>
+        <input id="portal-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Short summary" className="w-full mb-2 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
 
         {suggestions.length > 0 && (
           <div className="mb-3 space-y-2">
@@ -120,6 +140,8 @@ export default function PortalPage({ slug }) {
                     <button onClick={() => giveFeedback(s.id, true)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }}><ThumbsUp size={12} color={COLORS.teal} /></button>
                     <button onClick={() => giveFeedback(s.id, false)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }}><ThumbsDown size={12} color={COLORS.muted} /></button>
                   </div>
+                ) : feedbackGiven[s.id] === "up" ? (
+                  <p className="text-[11px]" style={{ color: COLORS.teal }}>Glad that helped!</p>
                 ) : (
                   <p className="text-[11px]" style={{ color: COLORS.teal }}>Thanks — still need help? Just submit below.</p>
                 )}
@@ -128,11 +150,16 @@ export default function PortalPage({ slug }) {
           </div>
         )}
 
-        <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Details (optional)</label>
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="w-full mb-3 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
+        <label htmlFor="portal-notes" className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Details (optional)</label>
+        <textarea id="portal-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className="w-full mb-3 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
 
-        <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Category</label>
-        <select value={category} onChange={(e) => setCategory(e.target.value)} className="w-full mb-4 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }}>
+        <label htmlFor="portal-category" className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Category</label>
+        {/* No default selection — previously silently defaulted to
+            categories[0], whatever sorted first alphabetically, with no
+            indication a choice had been made for the customer. Now it
+            requires an explicit pick, same as any other required field. */}
+        <select id="portal-category" value={category} onChange={(e) => setCategory(e.target.value)} className="w-full mb-4 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: category ? COLORS.text : COLORS.muted }}>
+          <option value="">Choose a category…</option>
           {categories.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
         </select>
 
@@ -141,7 +168,7 @@ export default function PortalPage({ slug }) {
         {/* Always visible, never gated behind trying self-service first —
             the research is explicit that trapping someone here is worse
             than not offering self-service at all. */}
-        <button onClick={submit} disabled={submitting || !title.trim()} className="w-full py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2" style={{ background: COLORS.amber, color: "#1A1200" }}>
+        <button onClick={submit} disabled={submitting || !title.trim() || !category} className="w-full py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2" style={{ background: COLORS.amber, color: "#1A1200" }}>
           <Send size={14} /> {submitting ? "Submitting…" : "Submit"}
         </button>
       </div>

@@ -76,7 +76,8 @@ export default function VendorTrackPage({ token }) {
                 {comments.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No messages yet.</p>}
               </div>
 
-              <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder="Reply here…"
+              <label htmlFor="vendor-reply" className="text-xs font-medium block mb-1" style={{ color: COLORS.faint }}>Reply</label>
+              <textarea id="vendor-reply" value={reply} onChange={(e) => setReply(e.target.value)} rows={2} placeholder="Reply here…"
                 className="w-full mb-2 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
               <button onClick={sendReply} disabled={sending || !reply.trim()} className="w-full py-2 rounded-lg text-sm font-semibold flex items-center justify-center gap-1.5" style={{ background: COLORS.amber, color: "#1A1200" }}>
                 <Send size={14} /> {sending ? "Sending…" : "Send reply"}

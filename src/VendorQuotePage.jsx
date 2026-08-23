@@ -25,6 +25,9 @@ export default function VendorQuotePage({ token }) {
     if (!row) { setError("This link doesn't look right — please check it with whoever sent it."); return; }
     setRequest(row);
     if (row.submitted_at) { setSubmitted(true); setPrice(row.quoted_price || ""); setNotes(row.notes || ""); setValidUntil(row.valid_until || ""); }
+    // Fire-and-forget — lets staff tell "opened, still deciding" apart from
+    // "never even saw the link" instead of both looking like "no response".
+    supabase.rpc("mark_quote_viewed", { track_token: token });
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
@@ -62,17 +65,23 @@ export default function VendorQuotePage({ token }) {
                   <Check size={20} color={COLORS.teal} className="mx-auto mb-1" />
                   <p className="text-sm" style={{ color: COLORS.teal }}>Quote submitted — thank you.</p>
                   <p className="text-xs mt-1" style={{ color: COLORS.muted }}>You quoted R{price}{validUntil ? `, valid until ${validUntil}` : ""}.</p>
+                  {/* The backend RPC (submit_quote_response) is a plain UPDATE
+                      with no re-submission guard — this confirmation screen was
+                      the only thing actually blocking a correction. Re-showing
+                      the form pre-filled with what was already submitted, same
+                      pattern as editing a Typeform response after the fact. */}
+                  <button onClick={() => setSubmitted(false)} className="text-xs underline mt-2" style={{ color: COLORS.muted }}>Edit my quote</button>
                 </div>
               ) : (
                 <>
-                  <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Your price</label>
-                  <input type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00"
+                  <label htmlFor="quote-price" className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Your price</label>
+                  <input id="quote-price" type="number" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.00"
                     className="w-full mb-2 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
-                  <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Valid until (optional)</label>
-                  <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)}
+                  <label htmlFor="quote-valid-until" className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Valid until (optional)</label>
+                  <input id="quote-valid-until" type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)}
                     className="w-full mb-2 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
-                  <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Notes (optional)</label>
-                  <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+                  <label htmlFor="quote-notes" className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Notes (optional)</label>
+                  <textarea id="quote-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
                     className="w-full mb-3 px-2.5 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
                   <button onClick={submit} disabled={sending || !price} className="w-full py-2 rounded-lg text-sm font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>
                     {sending ? "Submitting…" : "Submit quote"}
