@@ -8,6 +8,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { supabase } from "./supabaseClient.js";
 import { redactPII } from "./lib/redact.js";
 import { askAI } from "./lib/ai.js";
+import WarRoomView from "./WarRoom.jsx";
 
 const COLORS = {
   bg: "#0A1120", surface: "#121B2E", surfaceHi: "#182338", border: "#232F47",
@@ -121,7 +122,7 @@ const TOAST_KIND = {
 };
 
 /* =============================== ROOT APP ================================= */
-export default function App({ inviteCode }) {
+export default function App({ inviteCode, initialWarRoomIncidentId }) {
   const [session, setSession] = useState(undefined); // undefined = loading, null = logged out
   const [org, setOrg] = useState(null); // { id, name, language, retention_days, identity_module_enabled, ... }
   const [checkingOrg, setCheckingOrg] = useState(true);
@@ -158,7 +159,7 @@ export default function App({ inviteCode }) {
       ? <JoinScreen inviteCode={inviteCode} onJoined={loadOrg} />
       : <OnboardingScreen onCreated={loadOrg} />;
   }
-  return <MainApp org={org} onOrgUpdated={setOrg} />;
+  return <MainApp org={org} onOrgUpdated={setOrg} initialWarRoomIncidentId={initialWarRoomIncidentId} />;
 }
 
 function Centered({ children }) {
@@ -383,11 +384,12 @@ function TrialBanner({ org }) {
   );
 }
 
-function MainApp({ org, onOrgUpdated }) {
+function MainApp({ org, onOrgUpdated, initialWarRoomIncidentId }) {
   const [tab, setTab] = useState("deck");
   const [lookups, setLookups] = useState(null); // resolver_groups, categories, statuses, severities, rca_categories
   const [incidents, setIncidents] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
+  const [warRoomId, setWarRoomId] = useState(null);
   const [incidentListInit, setIncidentListInit] = useState(null);
   const [openProblemId, setOpenProblemId] = useState(null);
   const [toast, setToast] = useState(null); // { message, kind } | null
@@ -453,6 +455,21 @@ function MainApp({ org, onOrgUpdated }) {
   // periodically, not just after a user action — an SLA breach can
   // happen purely because time passed, with nobody touching anything.
   useEffect(() => { const t = setInterval(() => loadIncidents(), 60000); return () => clearInterval(t); }, [loadIncidents]);
+
+  // Deep link from a Slack/Teams War Room alert (/war-room/<incident id>,
+  // parsed in main.jsx) — waits for incidents to actually load since the
+  // match happens by id against the fetched list, then jumps straight into
+  // that incident's War Room. appliedInitialWarRoomRef stops this firing
+  // again on every 60s incidents refresh once it's already navigated once.
+  const appliedInitialWarRoomRef = useRef(false);
+  useEffect(() => {
+    if (appliedInitialWarRoomRef.current || !initialWarRoomIncidentId || !incidents.length) return;
+    const found = incidents.find((i) => i.id === initialWarRoomIncidentId);
+    if (found) {
+      appliedInitialWarRoomRef.current = true;
+      setSelectedId(found.id); setTab("incidents"); setWarRoomId(found.id);
+    }
+  }, [initialWarRoomIncidentId, incidents]);
 
   // Option B, chosen over the header-badge alternative (Option A,
   // preserved in the session log if ever reconsidered): spontaneous,
@@ -560,9 +577,13 @@ function MainApp({ org, onOrgUpdated }) {
           {tab === "deck" && <Deck incidents={incidents} lookups={lookups} org={org} tick={tick} members={members} onOpen={(id) => { setSelectedId(id); setTab("incidents"); }}
             onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} onNavigateSettings={() => setTab("settings")} />}
           {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} members={members} onSelect={setSelectedId} initFilter={incidentListInit} onInitConsumed={() => setIncidentListInit(null)} />}
-          {tab === "incidents" && selected && (
+          {tab === "incidents" && selected && warRoomId === selected.id && (
+            <WarRoomView incident={selected} org={org} members={members} showToast={showToast} onBack={() => setWarRoomId(null)} />
+          )}
+          {tab === "incidents" && selected && warRoomId !== selected.id && (
             <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick} members={members}
-              onBack={() => setSelectedId(null)} onChanged={loadIncidents} showToast={showToast} />
+              onBack={() => setSelectedId(null)} onChanged={loadIncidents} showToast={showToast}
+              onEnterWarRoom={() => setWarRoomId(selected.id)} />
           )}
           {tab === "new" && (
             <NewIncident lookups={lookups} org={org}
@@ -1588,7 +1609,7 @@ function ChatIntake({ lookups, org, onCreated }) {
 }
 
 /* ============================== INCIDENT DETAIL ============================= */
-function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, showToast, members }) {
+function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, showToast, members, onEnterWarRoom }) {
   const [rcaCategoryId, setRcaCategoryId] = useState(incident.rca_category?.id || "");
   const [resolutionClass, setResolutionClass] = useState(incident.resolution_class || "");
   const [aiLoading, setAiLoading] = useState("");
@@ -1651,11 +1672,19 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
   }
 
   async function warRoom() {
+    // The webhook post is the doorbell, not the room — it used to be the
+    // whole feature. It now also creates (or, on a later click, just
+    // re-opens) the actual War Room row and includes a direct link into it,
+    // instead of leaving whoever reads the Slack/Teams message to go find
+    // the incident themselves.
+    await supabase.rpc("open_war_room", { target_incident_id: incident.id });
     const assignment = incident.incident_assignments?.[0];
     const url = assignment?.resolver_groups?.channel_slack_webhook || assignment?.resolver_groups?.channel_teams_webhook || org.slack_webhook || org.teams_webhook;
-    if (url) fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `🚨 War room: ${incident.display_id} — ${incident.title}` }) }).catch(() => {});
+    const link = `${window.location.origin}/war-room/${incident.id}`;
+    if (url) fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `🚨 War room: ${incident.display_id} — ${incident.title}\n${link}` }) }).catch(() => {});
     await supabase.from("escalations").insert({ incident_id: incident.id, org_id: org.id, resolver_group_id: incident.incident_assignments?.[0]?.resolver_group_id, channel: url ? "Slack/Teams" : "Internal", kind: "war_room", delivered: url ? "sent" : "simulated" });
     showToast("War room opened"); onChanged();
+    onEnterWarRoom?.();
   }
 
   const identity = incident.incident_identity?.[0];
@@ -5678,6 +5707,40 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
   }, [incident, problemId]);
   useEffect(() => { load(); }, [load]);
 
+  // If this incident ran a War Room, its narrative is the closest thing to
+  // a real investigation log this incident has — closing the loop into RCA
+  // means offering to start from that instead of a blank problem statement,
+  // not replacing the manual flow above.
+  const [warRoomNarrative, setWarRoomNarrative] = useState(null);
+  const [draftingFromWarRoom, setDraftingFromWarRoom] = useState(false);
+  useEffect(() => {
+    if (!incident) { setWarRoomNarrative(null); return; }
+    (async () => {
+      const { data } = await supabase.from("war_rooms").select("what_we_know, what_tried, whats_next").eq("incident_id", incident.id).maybeSingle();
+      const hasContent = data && (data.what_we_know?.trim() || data.what_tried?.trim() || data.whats_next?.trim());
+      setWarRoomNarrative(hasContent ? data : null);
+    })();
+  }, [incident]);
+
+  async function draftFromWarRoom() {
+    if (!warRoomNarrative) return;
+    setDraftingFromWarRoom(true);
+    const combined = `What we know: ${warRoomNarrative.what_we_know}\nWhat we've tried: ${warRoomNarrative.what_tried}\nWhat's next: ${warRoomNarrative.whats_next}`;
+    const statement = (await askAI(
+      "You are an ITSM assistant. Write one concise sentence stating the problem, based on this incident's War Room narrative. Respond with only that sentence.",
+      redactPII(combined)
+    )).trim();
+    const methodResult = await askAI(
+      "A user is investigating a technical incident's root cause. If the problem sounds like it has one clear, single, linear chain of causes, respond with exactly: five_whys. If several different factors could be combining (people, process, technology, environment), respond with exactly: fishbone. Respond with only that one word.",
+      redactPII(combined)
+    );
+    setProblemStatement(statement);
+    setMethod((methodResult || "").trim().toLowerCase().includes("fishbone") ? "fishbone" : "five_whys");
+    setShowNew(true);
+    setDraftingFromWarRoom(false);
+    showToast("Drafted from the War Room narrative — review and save below");
+  }
+
   async function suggestMethod() {
     if (!problemStatement.trim()) { showToast("Describe the problem first"); return; }
     setSuggesting(true);
@@ -5783,7 +5846,14 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
       </div>
 
       {!showNew ? (
-        <button onClick={() => setShowNew(true)} className="sd-btn-g">Run a root cause analysis</button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setShowNew(true)} className="sd-btn-g">Run a root cause analysis</button>
+          {warRoomNarrative && (
+            <button onClick={draftFromWarRoom} disabled={draftingFromWarRoom} className="sd-btn-g" style={{ color: COLORS.teal, borderColor: COLORS.teal + "55" }}>
+              {draftingFromWarRoom ? "Drafting…" : "Draft from War Room"}
+            </button>
+          )}
+        </div>
       ) : (
         <div className="rounded-lg p-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
           <Field label="Problem statement — be specific, with numbers if you have them">
