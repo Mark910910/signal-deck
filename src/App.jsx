@@ -64,7 +64,18 @@ function timeAgo(dateStr) {
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m`;
   const hrs = Math.floor(mins / 60);
-  return `${hrs}h ${mins % 60}m`;
+  if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d`;
+}
+// Was already being computed for exactly one purpose — the single
+// ambient "this incident's gone quiet" toast below — and thrown away for
+// every other row. Factored out so the incident list can show the same
+// signal per-row (see IncidentList) instead of only ever surfacing the
+// single most-stale incident, once.
+const STALE_THRESHOLD_MS = 5 * 86400000;
+function lastActivityAt(incident) {
+  return (incident.incident_timeline || []).reduce((max, t) => Math.max(max, new Date(t.ts).getTime()), new Date(incident.created_at).getTime());
 }
 // Existing orgs have no template_id (onboarding was never touched by the
 // template system) — default to everything enabled, exactly current
@@ -508,8 +519,7 @@ function MainApp({ org, onOrgUpdated, initialWarRoomIncidentId }) {
       if (!i.resolved_at) {
         const deadline = new Date(i.created_at).getTime() + i.sla_minutes * 60000;
         if (now > deadline) currentBreaching.add(i.id);
-        const lastActivity = (i.incident_timeline || []).reduce((max, t) => Math.max(max, new Date(t.ts).getTime()), new Date(i.created_at).getTime());
-        if (now - lastActivity > 5 * 86400000) currentStale.add(i.id);
+        if (now - lastActivityAt(i) > STALE_THRESHOLD_MS) currentStale.add(i.id);
       }
     });
 
@@ -1335,6 +1345,22 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
                     cause, and it's only ever populated post-resolution, so
                     it's absent on every still-open row anyway. */}
                 <span className="text-[11px]" style={{ color: COLORS.muted }}>{inc.category?.name} · via {inc.source}{inc.rca_category?.name ? ` · cause: ${inc.rca_category.name}` : ""}</span>
+                {/* Same computation already running for the single ambient
+                    "gone quiet" toast (see MainApp) — thrown away for every
+                    other row until now. Two incidents can look identically
+                    "handled" (assigned, in progress, SLA not yet breached)
+                    while one's being actively worked and the other hasn't
+                    moved in days; severity/status/assignee are all
+                    snapshots of current state, none of them show
+                    trajectory. No new element — just one more clause on a
+                    line already being read, same muted color as the rest
+                    of it, only shifting to amber past the same 5-day
+                    threshold the toast already uses. */}
+                {!inc.resolved_at && (
+                  <span className="text-[11px]" style={{ color: (Date.now() - lastActivityAt(inc) > STALE_THRESHOLD_MS) ? COLORS.amber : COLORS.muted }}>
+                    {" · "}last activity {timeAgo(new Date(lastActivityAt(inc)).toISOString())} ago
+                  </span>
+                )}
               </div>
             </div>
             <SLABadge incident={inc} org={org} />
