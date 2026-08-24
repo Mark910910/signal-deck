@@ -30,7 +30,11 @@ export default function PortalPage({ slug }) {
   const [copied, setCopied] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [feedbackGiven, setFeedbackGiven] = useState({});
-  const shownRef = useRef(new Set());
+  // Maps article id -> title, not just a Set of ids — later searches
+  // replace `suggestions` entirely, so by the time someone actually
+  // submits, an article shown a minute ago (on an earlier, since-refined
+  // query) would otherwise have no title left to remember it by.
+  const shownRef = useRef(new Map());
 
   useEffect(() => {
     (async () => {
@@ -60,7 +64,7 @@ export default function PortalPage({ slug }) {
       // keystroke while it stays in the results.
       (data || []).forEach((s) => {
         if (!shownRef.current.has(s.id)) {
-          shownRef.current.add(s.id);
+          shownRef.current.set(s.id, s.title);
           supabase.rpc("record_kb_shown", { article_id: s.id });
         }
       });
@@ -79,8 +83,19 @@ export default function PortalPage({ slug }) {
   async function submit() {
     if (!title.trim() || !category) return;
     setSubmitting(true); setError("");
+    // Passive, staff-only context — the customer does nothing differently
+    // and sees nothing new. Only articles that DIDN'T get a thumbs-up carry
+    // forward (an article marked helpful isn't useful context for an agent —
+    // the deflection worked, nothing to flag). This is what lets an agent
+    // avoid re-suggesting the exact article the customer already read and
+    // rejected minutes ago, using data record_kb_shown/log_kb_feedback
+    // already capture and previously only ever rolled up into an org-wide
+    // aggregate, never carried into the specific incident it resulted in.
+    const shownArticles = Array.from(shownRef.current.entries())
+      .filter(([id]) => feedbackGiven[id] !== "up")
+      .map(([id, articleTitle]) => ({ title: articleTitle, was_helpful: feedbackGiven[id] === "down" ? false : null }));
     const { data, error } = await supabase.rpc("submit_via_portal", {
-      slug, incident_title: title, incident_notes: notes, category_name: category,
+      slug, incident_title: title, incident_notes: notes, category_name: category, shown_articles: shownArticles,
     });
     setSubmitting(false);
     if (error) { setError("Something went wrong submitting this — please try again."); return; }

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import {
   AlertTriangle, Clock, CheckCircle2, Radio, Search, Settings as SettingsIcon,
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
-  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server, Truck, ChevronUp, ChevronDown
+  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server, Truck, ChevronUp, ChevronDown, BookOpen
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
 import { supabase } from "./supabaseClient.js";
@@ -1845,6 +1845,25 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           <AssigneeIndicator incident={incident} members={members} />
         </div>
         <p className="text-sm" style={{ color: COLORS.muted }}>{incident.notes}</p>
+
+        {/* Deflection memory — staff-only, passive context carried forward
+            from the portal's own self-service search. The customer did
+            nothing differently to produce this; record_kb_shown/
+            log_kb_feedback were already tracking exactly this, it just
+            used to only ever roll up into an org-wide aggregate and never
+            reach the one incident it actually resulted from. Lets whoever
+            picks this up avoid re-suggesting the article the customer
+            already read and rejected minutes before submitting. */}
+        {Array.isArray(incident.deflection_context) && incident.deflection_context.length > 0 && (
+          <div className="mt-2 p-2 rounded-lg flex items-start gap-1.5" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+            <BookOpen size={13} color={COLORS.faint} className="mt-0.5 shrink-0" />
+            <p className="text-xs" style={{ color: COLORS.faint }}>
+              Customer was shown {incident.deflection_context.map((a, i) => (
+                <span key={i}>{i > 0 ? ", " : ""}<span style={{ color: COLORS.muted }}>"{a.title}"</span>{a.was_helpful === false ? " (marked not helpful)" : ""}</span>
+              ))} before submitting.
+            </p>
+          </div>
+        )}
 
         {/* SLA status — its own visually separated block, not stacked
             directly under the description with no breathing room. */}
