@@ -5730,6 +5730,16 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
   const [whys, setWhys] = useState([""]);
   const [fishbone, setFishbone] = useState({ man: "", machine: "", method: "", material: "", measurement: "", milieu: "" });
   const [saving, setSaving] = useState(false);
+  // Found live: on an incident with several analyses already saved, the
+  // form this opens renders in the same spot the button was — below all of
+  // them. Clicking "Draft from War Room" was working correctly the whole
+  // time (it had already produced and saved several drafts), but with
+  // enough existing analyses stacked above it, the newly-opened form landed
+  // below the fold with nothing to indicate it had appeared at all.
+  const newFormRef = useRef(null);
+  useEffect(() => {
+    if (showNew) newFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [showNew]);
 
   const load = useCallback(async () => {
     const column = incident ? "incident_id" : "problem_id";
@@ -5757,30 +5767,41 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
   async function draftFromWarRoom() {
     if (!warRoomNarrative) return;
     setDraftingFromWarRoom(true);
-    const combined = `What we know: ${warRoomNarrative.what_we_know}\nWhat we've tried: ${warRoomNarrative.what_tried}\nWhat's next: ${warRoomNarrative.whats_next}`;
-    const rawStatement = await askAI(
-      "You are an ITSM assistant. Write one concise sentence stating the problem, based on this incident's War Room narrative. Respond with only that sentence.",
-      redactPII(combined)
-    );
-    // Don't drop the AI's own "unavailable" wording into a form field the
-    // user is about to save as this incident's actual RCA problem
-    // statement — found in a usability pass on the sibling War Room
-    // summarize feature, same failure shape here.
-    if (isAiUnavailable(rawStatement)) {
+    // Wrapped in try/catch/finally — found live: with no error handling
+    // here, any unexpected failure (a thrown exception, not just askAI's
+    // own handled "unavailable" case) left the button stuck on "Drafting…"
+    // forever with nothing shown to the user, indistinguishable from the
+    // click not having done anything at all. Every exit path now either
+    // shows a toast or opens the form — never silence.
+    try {
+      const combined = `What we know: ${warRoomNarrative.what_we_know}\nWhat we've tried: ${warRoomNarrative.what_tried}\nWhat's next: ${warRoomNarrative.whats_next}`;
+      const rawStatement = await askAI(
+        "You are an ITSM assistant. Write one concise sentence stating the problem, based on this incident's War Room narrative. Respond with only that sentence.",
+        redactPII(combined)
+      );
+      // Don't drop the AI's own "unavailable" wording into a form field the
+      // user is about to save as this incident's actual RCA problem
+      // statement — found in a usability pass on the sibling War Room
+      // summarize feature, same failure shape here.
+      if (isAiUnavailable(rawStatement)) {
+        showToast("AI drafting isn't available right now — try again shortly, or fill this in manually.");
+        return;
+      }
+      const statement = rawStatement.trim();
+      const methodResult = await askAI(
+        "A user is investigating a technical incident's root cause. If the problem sounds like it has one clear, single, linear chain of causes, respond with exactly: five_whys. If several different factors could be combining (people, process, technology, environment), respond with exactly: fishbone. Respond with only that one word.",
+        redactPII(combined)
+      );
+      setProblemStatement(statement);
+      setMethod((methodResult || "").trim().toLowerCase().includes("fishbone") ? "fishbone" : "five_whys");
+      setShowNew(true);
+      showToast("Drafted from the War Room narrative — review and save below");
+    } catch (e) {
+      console.error("draftFromWarRoom failed", e);
+      showToast("Couldn't draft from the War Room — please try again.");
+    } finally {
       setDraftingFromWarRoom(false);
-      showToast("AI drafting isn't available right now — try again shortly, or fill this in manually.");
-      return;
     }
-    const statement = rawStatement.trim();
-    const methodResult = await askAI(
-      "A user is investigating a technical incident's root cause. If the problem sounds like it has one clear, single, linear chain of causes, respond with exactly: five_whys. If several different factors could be combining (people, process, technology, environment), respond with exactly: fishbone. Respond with only that one word.",
-      redactPII(combined)
-    );
-    setProblemStatement(statement);
-    setMethod((methodResult || "").trim().toLowerCase().includes("fishbone") ? "fishbone" : "five_whys");
-    setShowNew(true);
-    setDraftingFromWarRoom(false);
-    showToast("Drafted from the War Room narrative — review and save below");
   }
 
   async function suggestMethod() {
@@ -5897,7 +5918,7 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
           )}
         </div>
       ) : (
-        <div className="rounded-lg p-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
+        <div ref={newFormRef} className="rounded-lg p-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
           <Field label="Problem statement — be specific, with numbers if you have them">
             <textarea value={problemStatement} onChange={(e) => setProblemStatement(e.target.value)} rows={2} className="sd-in3" placeholder="e.g. Tier 1 tickets rose from 45/week to 112/week starting Monday" />
           </Field>
