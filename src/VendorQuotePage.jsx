@@ -4,7 +4,12 @@ import { supabase } from "./supabaseClient.js";
 
 const COLORS = {
   bg: "#0A1120", surface: "#121B2E", surfaceHi: "#182338", border: "#232F47",
-  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", text: "#E8ECF3", muted: "#8B96AB", faint: "#5B6580",
+  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", text: "#E8ECF3", muted: "#8B96AB",
+  // Was #5B6580 — ~3.25:1 on bg, failing WCAG 1.4.3's 4.5:1 floor. Same
+  // fix already applied in App.jsx/WarRoom.jsx but missed on this file —
+  // the one a vendor with zero context on Signal Deck reads first.
+  // #838EA9 clears 4.5:1.
+  faint: "#838EA9",
 };
 
 // Same no-login pattern as VendorTrackPage — the exact thing the SME-

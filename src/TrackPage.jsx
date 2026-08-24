@@ -4,7 +4,13 @@ import { supabase } from "./supabaseClient.js";
 
 const COLORS = {
   bg: "#0A1120", surface: "#121B2E", surfaceHi: "#182338", border: "#232F47",
-  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", text: "#E8ECF3", muted: "#8B96AB", faint: "#5B6580",
+  amber: "#F5A623", teal: "#2DD4BF", red: "#F0483E", text: "#E8ECF3", muted: "#8B96AB",
+  // Was #5B6580 — ~3.25:1 on bg, failing WCAG 1.4.3's 4.5:1 floor for the
+  // normal-size text it's used for here (timestamps, "No messages yet.",
+  // section labels). Same fix already applied in App.jsx/WarRoom.jsx but
+  // missed on this file — the one most likely read by a customer on a
+  // phone with no account and no one to ask. #838EA9 clears 4.5:1.
+  faint: "#838EA9",
 };
 
 // The other half of the portal: once a customer has a tracking link, this

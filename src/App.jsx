@@ -37,6 +37,17 @@ const COLORS = {
 // glance. Yellow keeps the Critical(red)->High(amber)->Medium->Low(blue)
 // ramp visually distinct from every "things are fine" state in the app.
 const SEV_COLOR = { Critical: COLORS.red, High: COLORS.amber, Medium: COLORS.yellow, Low: COLORS.blue };
+// Picking "Resolved"/"Closed" from the plain Status dropdown used to only
+// ever touch status_id — every other "is this actually resolved" check in
+// the app (Deck's stats, the Open/Resolved filter tabs, SLA breach timing,
+// whether Acknowledge/Escalate/War Room show at all) keys off resolved_at
+// instead, which that dropdown never set. The label could say "Resolved"
+// while the incident stayed fully open everywhere else, silently. These
+// two names are excluded from that dropdown's options for exactly that
+// reason — reaching either one now has to go through the real Resolve
+// flow (resolve(), which sets resolved_at, resolution_class, and status_id
+// together), never a plain unguarded status change.
+const TERMINAL_STATUS_NAMES = ["Resolved", "Closed"];
 
 function fmtClock(ms) {
   const sign = ms < 0 ? "-" : "";
@@ -44,6 +55,16 @@ function fmtClock(ms) {
   const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return `${sign}${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+}
+// Coarse "how long ago" for the escalation ack receipt — minutes/hours is
+// plenty of precision for "has anyone actually seen this yet," no need for
+// live per-second ticking here.
+function timeAgo(dateStr) {
+  const mins = Math.floor((Date.now() - new Date(dateStr).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  return `${hrs}h ${mins % 60}m`;
 }
 // Existing orgs have no template_id (onboarding was never touched by the
 // template system) — default to everything enabled, exactly current
@@ -578,7 +599,7 @@ function MainApp({ org, onOrgUpdated, initialWarRoomIncidentId }) {
             onNavigateIncidents={(init) => { setIncidentListInit(init); setTab("incidents"); }} onNavigateSettings={() => setTab("settings")} />}
           {tab === "incidents" && !selected && <IncidentList incidents={incidents} lookups={lookups} org={org} tick={tick} members={members} onSelect={setSelectedId} initFilter={incidentListInit} onInitConsumed={() => setIncidentListInit(null)} />}
           {tab === "incidents" && selected && warRoomId === selected.id && (
-            <WarRoomView incident={selected} org={org} members={members} showToast={showToast} onBack={() => setWarRoomId(null)} />
+            <WarRoomView incident={selected} org={org} lookups={lookups} members={members} showToast={showToast} onChanged={loadIncidents} onBack={() => setWarRoomId(null)} />
           )}
           {tab === "incidents" && selected && warRoomId !== selected.id && (
             <IncidentDetail incident={selected} incidents={incidents} lookups={lookups} org={org} tick={tick} members={members}
@@ -758,8 +779,25 @@ function Panel({ title, icon: Icon, children }) {
     </div>
   );
 }
+// The label rendered as a sibling of its control, not a wrapper around it —
+// meaning it had zero programmatic association (no htmlFor/id, no nesting)
+// across every form in the authenticated app: Log Incident, every Settings
+// panel, Assets, Vendors, Problems, Preventatives, RFQ, all of it. A screen
+// reader tabbing into any of these fields heard only "textbox"/"combobox"
+// with no accessible name (WCAG 1.3.1, 4.1.2) — the public no-login pages
+// already get this right with explicit htmlFor/id pairs; this fixes the
+// staff-side gap the same way every one of them is used, in one place,
+// with no call-site changes needed: nesting the control inside the label
+// is a real, implicit HTML association, not just a visual fix.
 function Field({ label, children }) {
-  return <div className="mb-2.5"><label className="text-[11px] font-medium block mb-1" style={{ color: COLORS.muted }}>{label}</label>{children}</div>;
+  return (
+    <div className="mb-2.5">
+      <label className="text-[11px] font-medium block" style={{ color: COLORS.muted }}>
+        <span className="block mb-1">{label}</span>
+        {children}
+      </label>
+    </div>
+  );
 }
 
 // The actual fix for Incident Detail's flat stack of up to 19 panels —
@@ -1683,9 +1721,37 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
     // place, using an actual foreign key rather than matching names between
     // systems the way the ServiceNow<->Jira team sync does.
     const url = groupWebhook || orgWebhook;
-    let delivered = "simulated";
-    if (url) { try { await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: `Escalation: ${incident.display_id} — ${incident.title}` }) }); delivered = groupWebhook ? "sent to team channel" : "sent to org channel"; } catch { delivered = "simulated (blocked)"; } }
-    await supabase.from("escalations").insert({ incident_id: incident.id, org_id: org.id, resolver_group_id: groupId, channel, kind: "escalation", delivered });
+    if (!url) { showToast(`No ${channel} webhook configured for this team or org yet.`); return; }
+
+    // Row created before the send, not after — its id is what a one-tap
+    // acknowledge link gets embedded into the message itself. This is
+    // "received, not just sent": a 200 back from the webhook only proves
+    // the message left Signal Deck, never that a human saw it. Reuses the
+    // exact token/one-click pattern already built for AckPage, just
+    // scoped to this one escalation rather than the incident as a whole —
+    // see 11-escalation-ack-receipts.sql for why that's a separate signal.
+    const { data: escRow, error: escError } = await supabase.from("escalations")
+      .insert({ incident_id: incident.id, org_id: org.id, resolver_group_id: groupId, channel, kind: "escalation", delivered: "pending" })
+      .select().single();
+    if (escError) { showToast(escError.message); return; }
+    const { data: ackToken } = await supabase.rpc("create_escalation_ack_token", { target_escalation_id: escRow.id });
+    const ackLink = ackToken ? `${window.location.origin}/escalation-ack/${ackToken}` : null;
+
+    let delivered;
+    try {
+      await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: `Escalation: ${incident.display_id} — ${incident.title}${ackLink ? `\nSeen this? Tap to confirm you're on it: ${ackLink}` : ""}` }) });
+      delivered = groupWebhook ? "sent to team channel" : "sent to org channel";
+    } catch {
+      // Kept as a failed record rather than deleted — a real, if small,
+      // improvement over before: a failed send used to leave no trace at
+      // all once the toast disappeared.
+      await supabase.from("escalations").update({ delivered: "failed to send" }).eq("id", escRow.id);
+      showToast(`${channel} escalation failed to send — check the webhook URL in Settings.`);
+      onChanged();
+      return;
+    }
+    await supabase.from("escalations").update({ delivered }).eq("id", escRow.id);
     showToast(`${channel} escalation logged (${delivered})`); onChanged();
   }
 
@@ -1817,10 +1883,23 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           up here — these are read *and acted on*, not just glanced at. */}
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
         <div className="flex-1 rounded-xl p-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
-          <div className="flex items-center gap-2 mb-3"><Activity size={15} color={COLORS.amber} /><h3 className="sd-display text-sm font-semibold">Status</h3></div>
-          <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
-            {lookups.statuses.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
+          <div className="flex items-center gap-2 mb-3"><Activity size={15} color={incident.resolved_at ? COLORS.teal : COLORS.amber} /><h3 className="sd-display text-sm font-semibold">Status</h3></div>
+          {incident.resolved_at ? (
+            // Once actually resolved (resolved_at set, via the real Resolve
+            // flow below), status is a fact, not a knob — a plain dropdown
+            // here would let someone flip it back to "New" while the
+            // incident stays resolved everywhere else, the same
+            // label/reality split this whole fix exists to close.
+            <div className="flex items-center gap-1.5 text-sm" style={{ color: COLORS.teal }}>
+              <CheckCircle2 size={15} /> {incident.status?.name || "Resolved"}
+            </div>
+          ) : (
+            <select value={incident.status?.id || ""} onChange={(e) => changeStatus(e.target.value)} className="sd-in3">
+              {lookups.statuses
+                .filter((s) => !TERMINAL_STATUS_NAMES.includes(s.name) || s.id === incident.status?.id)
+                .map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          )}
         </div>
         <div className="flex-1">
           <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
@@ -1832,15 +1911,41 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           collapsed "Files & approval" section, genuinely poor placement
           for something time-sensitive. */}
       <Panel title="Escalate" icon={Send}>
+        {/* WhatsApp/Email/SMS used to sit here as buttons with no
+            recipient field anywhere in this panel and no real send path —
+            clicking one always logged "(simulated)", which inferToastKind
+            still rendered as a plain green success toast. A triager had
+            every reason to believe someone was paged: real, working,
+            cost-disclosed WhatsApp paging already exists via Escalation
+            policies (Settings → Team & on-call) using each person's own
+            number. Pointing there instead of faking a send here. */}
         <div className="flex flex-wrap gap-2">
-          {["WhatsApp", "Email", "SMS", "Slack", "Teams"].map((ch) => (
+          {["Slack", "Teams"].map((ch) => (
             <button key={ch} onClick={() => escalate(ch)} className="sd-btn-g">{ch}</button>
           ))}
         </div>
+        <p className="text-xs mt-2" style={{ color: COLORS.faint }}>
+          For WhatsApp paging with real delivery, set up Escalation policies in Settings — this panel only posts to Slack/Teams webhooks.
+        </p>
         <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto">
-          {(incident.escalations || []).map((e) => (
-            <div key={e.id} className="text-xs" style={{ color: COLORS.muted }}>{new Date(e.ts).toLocaleString()} — {e.channel} ({e.delivered})</div>
-          ))}
+          {/* "Sent" used to be the whole story — a webhook returning 200
+              proves the message left Signal Deck, not that anyone on the
+              other end saw it. Ack-trackable sends (Slack/Teams, the only
+              channels that actually go anywhere right now) now show
+              whether the one-tap link in that message has been used. */}
+          {(incident.escalations || []).map((e) => {
+            const trackable = e.delivered && e.delivered.startsWith("sent");
+            return (
+              <div key={e.id} className="text-xs" style={{ color: COLORS.muted }}>
+                {new Date(e.ts).toLocaleString()} — {e.channel} ({e.delivered})
+                {trackable && (
+                  e.acknowledged_at
+                    ? <span style={{ color: COLORS.teal }}> → seen {timeAgo(e.acknowledged_at)} ago</span>
+                    : <span style={{ color: COLORS.amber }}> → no response yet ({timeAgo(e.ts)})</span>
+                )}
+              </div>
+            );
+          })}
         </div>
       </Panel>
 
@@ -1974,13 +2079,23 @@ function PrivacyCenter({ org, onOrgUpdated, incidents, showToast }) {
     showToast(enabled ? "Identity Module enabled" : "Identity Module disabled");
   }
 
-  async function purgeOverdue() {
+  function purgeOverdue() {
     const cutoff = Date.now() - org.retention_days * 86400000;
     const overdue = incidents.filter((i) => i.resolved_at && new Date(i.resolved_at).getTime() < cutoff);
     if (overdue.length === 0) { showToast("Nothing overdue"); return; }
-    await supabase.from("incidents").delete().in("id", overdue.map((i) => i.id));
-    await supabase.from("audit_log").insert({ org_id: org.id, action: "data_purged", detail: `${overdue.length} incident(s) purged` });
-    showToast(`${overdue.length} record(s) purged`);
+    // This is the single most destructive action on this entire screen —
+    // a permanent bulk delete of whole incident records, not one field —
+    // and it used to be the one button here with no confirmation at all,
+    // sitting right above a redact/delete flow that already gates through
+    // this exact modal. Routing it through the same confirmAction path
+    // that already exists rather than leaving it as the odd one out.
+    setConfirmAction({ type: "purge", ids: overdue.map((i) => i.id), count: overdue.length });
+  }
+  async function runPurge(ids) {
+    await supabase.from("incidents").delete().in("id", ids);
+    await supabase.from("audit_log").insert({ org_id: org.id, action: "data_purged", detail: `${ids.length} incident(s) purged` });
+    setConfirmAction(null);
+    showToast(`${ids.length} record(s) purged`);
   }
 
   async function searchIdentity() {
@@ -2047,10 +2162,14 @@ function PrivacyCenter({ org, onOrgUpdated, incidents, showToast }) {
       {confirmAction && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(5,8,16,0.85)" }}>
           <div className="w-full max-w-sm rounded-xl p-5" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
-            <p className="text-sm mb-4">This can't be undone. Continue?</p>
+            <p className="text-sm mb-4">
+              {confirmAction.type === "purge"
+                ? `Permanently delete ${confirmAction.count} resolved incident(s) past the retention window? This can't be undone.`
+                : "This can't be undone. Continue?"}
+            </p>
             <div className="flex gap-2">
               <button onClick={() => setConfirmAction(null)} className="flex-1 sd-btn-g">Cancel</button>
-              <button onClick={() => confirmAction.type === "delete" ? eraseAll(confirmAction.ids) : redact(confirmAction.ids)} className="flex-1 py-2 rounded-lg text-sm font-semibold" style={{ background: COLORS.red, color: "#fff" }}>Confirm</button>
+              <button onClick={() => confirmAction.type === "purge" ? runPurge(confirmAction.ids) : confirmAction.type === "delete" ? eraseAll(confirmAction.ids) : redact(confirmAction.ids)} className="flex-1 py-2 rounded-lg text-sm font-semibold" style={{ background: COLORS.red, color: "#fff" }}>Confirm</button>
             </div>
           </div>
         </div>

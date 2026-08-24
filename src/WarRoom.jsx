@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { ArrowLeft, Users, Send, Sparkles, Check, Radio, AlertTriangle, Pin } from "lucide-react";
+import { ArrowLeft, Users, Send, Sparkles, Check, Radio, AlertTriangle, Pin, CheckCircle2 } from "lucide-react";
 import { supabase } from "./supabaseClient.js";
 import { redactPII } from "./lib/redact.js";
 import { askAI, isAiUnavailable } from "./lib/ai.js";
@@ -35,7 +35,7 @@ const PRESENCE_ACTIVE_WINDOW_MS = 45000;
 // actually looking at this right now), a calm AI monitor that only speaks
 // up when something's actually stale or unassigned, and a manual summarize
 // button using the same click-triggered AI pattern as the rest of the app.
-export default function WarRoomView({ incident, org, members, showToast, onBack }) {
+export default function WarRoomView({ incident, org, lookups, members, showToast, onChanged, onBack }) {
   const [warRoom, setWarRoom] = useState(null);
   const [narrative, setNarrative] = useState({ what_we_know: "", what_tried: "", whats_next: "" });
   const [saveStatus, setSaveStatus] = useState({});
@@ -45,6 +45,16 @@ export default function WarRoomView({ incident, org, members, showToast, onBack 
   const [posting, setPosting] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Resolving used to require backing out to "Back to incident" first —
+  // the one lifecycle action that mattered most while coordinating a live
+  // incident wasn't reachable from the room itself. Deliberately minimal
+  // here (just the required resolution classification, not the optional
+  // RCA category too) rather than duplicating the full Resolve panel —
+  // RCA category assignment already has its own path via "Draft from War
+  // Room" back on the incident page.
+  const [resolutionClass, setResolutionClass] = useState("");
+  const [resolving, setResolving] = useState(false);
+  const [showResolve, setShowResolve] = useState(false);
 
   // Tracks which narrative fields the person in front of this screen is
   // actively mid-edit on, so an incoming realtime update from someone else
@@ -227,6 +237,25 @@ export default function WarRoomView({ incident, org, members, showToast, onBack 
     loadComments(warRoom.id);
   }
 
+  async function resolveFromWarRoom() {
+    if (!resolutionClass) { showToast("Choose a resolution classification first"); return; }
+    setResolving(true);
+    // Mirrors resolve() in IncidentDetail exactly — resolved_at,
+    // resolution_class, and status_id all move together, never just one of
+    // them. See TERMINAL_STATUS_NAMES in App.jsx for why that matters.
+    const resolvedStatus = lookups.statuses.find((s) => s.name === "Resolved") || lookups.statuses[lookups.statuses.length - 1];
+    const { error } = await supabase.from("incidents").update({
+      resolved_at: new Date().toISOString(), resolution_class: resolutionClass, status_id: resolvedStatus.id,
+    }).eq("id", incident.id);
+    if (error) { setResolving(false); showToast(error.message); return; }
+    await supabase.from("incident_timeline").insert({ incident_id: incident.id, org_id: org.id, status_id: resolvedStatus.id, note: "Incident resolved" });
+    await postSystemComment(`Resolved (${resolutionClass}).`, warRoom.id);
+    setResolving(false);
+    showToast("Incident resolved");
+    onChanged?.();
+    loadComments(warRoom.id);
+  }
+
   async function postSystemComment(body, warRoomId) {
     await supabase.from("war_room_comments").insert({ org_id: org.id, war_room_id: warRoomId, author_type: "system", body });
   }
@@ -301,12 +330,43 @@ export default function WarRoomView({ incident, org, members, showToast, onBack 
     <div className="pb-6">
       <button onClick={onBack} className="flex items-center gap-1.5 text-sm mb-3" style={{ color: COLORS.muted }}><ArrowLeft size={15} /> Back to incident</button>
 
-      <div className="flex items-center gap-2 mb-1">
-        <Radio size={16} color={COLORS.red} />
-        <h2 className="sd-display text-base font-semibold" style={{ color: COLORS.text }}>War Room</h2>
-        <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{incident.display_id}</span>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="flex items-center gap-2">
+          <Radio size={16} color={COLORS.red} />
+          <h2 className="sd-display text-base font-semibold" style={{ color: COLORS.text }}>War Room</h2>
+          <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{incident.display_id}</span>
+        </div>
+        {/* Resolving used to only be reachable by backing out to "Back to
+            incident" first — the one lifecycle action that matters most
+            while actively coordinating wasn't available from the room
+            itself. Collapsed behind a toggle rather than a permanently
+            open panel, so it doesn't compete with the narrative/discussion
+            for space on every visit, only when someone actually wants it. */}
+        {incident.resolved_at ? (
+          <span className="flex items-center gap-1 text-xs shrink-0" style={{ color: COLORS.teal }}>
+            <CheckCircle2 size={13} /> Resolved
+          </span>
+        ) : (
+          <button onClick={() => setShowResolve((s) => !s)} className="flex items-center gap-1 text-xs shrink-0" style={{ color: COLORS.teal }}>
+            <CheckCircle2 size={13} /> Resolve
+          </button>
+        )}
       </div>
       <p className="text-sm mb-3" style={{ color: COLORS.muted }}>{incident.title}</p>
+
+      {showResolve && !incident.resolved_at && (
+        <div className="rounded-xl p-4 mb-4" style={{ background: COLORS.surface, border: `1px solid ${COLORS.teal}55` }}>
+          <div className="flex items-center gap-2 mb-3"><CheckCircle2 size={15} color={COLORS.teal} /><h3 className="sd-display text-sm font-semibold">Resolve this incident</h3></div>
+          <label className="text-xs font-medium block mb-1" style={{ color: COLORS.muted }}>Resolution classification</label>
+          <select value={resolutionClass} onChange={(e) => setResolutionClass(e.target.value)} className="sd-in3 mb-3">
+            <option value="">Choose…</option>
+            <option>Permanent Fix</option><option>Temporary Fix</option><option>Workaround</option><option>Escalated (No Fix)</option>
+          </select>
+          <button onClick={resolveFromWarRoom} disabled={resolving} className="w-full py-2 rounded-lg text-sm font-medium" style={{ background: COLORS.teal + "1c", color: COLORS.teal, border: `1px solid ${COLORS.teal}55` }}>
+            {resolving ? "Resolving…" : `Resolve ${incident.display_id}`}
+          </button>
+        </div>
+      )}
 
       {/* Presence — a compact strip, not a full card competing with the
           narrative for attention. Honest in both directions now: it

@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import PortalPage from "./PortalPage.jsx";
 import AckPage from "./AckPage.jsx";
+import EscalationAckPage from "./EscalationAckPage.jsx";
 import TrackPage from "./TrackPage.jsx";
 import VendorTrackPage from "./VendorTrackPage.jsx";
 import VendorQuotePage from "./VendorQuotePage.jsx";
@@ -14,7 +15,10 @@ import "./index.css";
 // is the public one-click acknowledge link, /join/<code> is a staff invite
 // link, /track/<token> is a customer's own status + reply page, /vendor/<token>
 // is the same idea for a vendor on an issue, /quote/<token> is a vendor
-// submitting a price for a quote request, /war-room/<incident id> is the
+// submitting a price for a quote request, /escalation-ack/<token> is the
+// same one-tap idea but for a specific Slack/Teams escalation page rather
+// than the incident as a whole (see 11-escalation-ack-receipts.sql for
+// why that's a separate signal), /war-room/<incident id> is the
 // Slack/Teams War Room alert's deep link (still behind Supabase Auth — it
 // just tells the staff app which incident to jump into once logged in),
 // everything else is the staff app behind Supabase Auth.
@@ -25,11 +29,13 @@ const joinMatch = path.match(/^\/join\/(.+)$/);
 const trackMatch = path.match(/^\/track\/(.+)$/);
 const vendorMatch = path.match(/^\/vendor\/(.+)$/);
 const quoteMatch = path.match(/^\/quote\/(.+)$/);
+const escalationAckMatch = path.match(/^\/escalation-ack\/(.+)$/);
 const warRoomMatch = path.match(/^\/war-room\/(.+)$/);
 
 function Router() {
   if (portalMatch) return <PortalPage slug={decodeURIComponent(portalMatch[1])} />;
   if (ackMatch) return <AckPage token={decodeURIComponent(ackMatch[1])} />;
+  if (escalationAckMatch) return <EscalationAckPage token={decodeURIComponent(escalationAckMatch[1])} />;
   if (trackMatch) return <TrackPage token={decodeURIComponent(trackMatch[1])} />;
   if (vendorMatch) return <VendorTrackPage token={decodeURIComponent(vendorMatch[1])} />;
   if (quoteMatch) return <VendorQuotePage token={decodeURIComponent(quoteMatch[1])} />;
