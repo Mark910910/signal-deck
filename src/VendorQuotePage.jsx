@@ -63,6 +63,20 @@ export default function VendorQuotePage({ token }) {
                 <div className="text-xs mb-1" style={{ color: COLORS.faint }}>{request.display_id}</div>
                 <div className="text-sm mb-1" style={{ color: COLORS.text }}>We'd like a quote for:</div>
                 <p className="text-sm" style={{ color: COLORS.muted }}>{request.description}</p>
+                {/* Deliberately coarse — a plain-language window, never an
+                    exact countdown, and derived only from data the vendor
+                    can already partly infer (that this is linked to
+                    something urgent) — never the incident's own title or
+                    customer detail, which stays internal. */}
+                {request.linked_incident_severity && !request.linked_incident_resolved_at && (() => {
+                  const deadline = new Date(request.linked_incident_created_at).getTime() + request.linked_incident_sla_minutes * 60000;
+                  const hoursLeft = Math.round((deadline - Date.now()) / 3600000);
+                  return (
+                    <p className="text-xs mt-2" style={{ color: COLORS.amber }}>
+                      This is holding up an active issue {hoursLeft > 0 ? `we're aiming to have sorted within about ${hoursLeft} hour${hoursLeft !== 1 ? "s" : ""}` : "that's already past its target time"}.
+                    </p>
+                  );
+                })()}
               </div>
 
               {submitted ? (

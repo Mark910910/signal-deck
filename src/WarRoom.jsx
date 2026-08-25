@@ -22,6 +22,13 @@ const NARRATIVE_FIELDS = [
 const MONITOR_INTERVAL_MS = 120000;
 const STALE_MINUTES_THRESHOLD = 12;
 const NUDGE_COOLDOWN_MS = 15 * 60000;
+// Bystander-silence — the opposite failure mode from "nobody's looked":
+// a room full of people, each assuming someone else is driving, saying
+// nothing. Well documented in real incident-response postmortems, not
+// something the existing presence UI (which only ever flags too little
+// presence) could catch on its own.
+const BYSTANDER_MIN_VIEWERS = 4;
+const BYSTANDER_QUIET_MS = 10 * 60000;
 const PRESENCE_HEARTBEAT_MS = 20000;
 // "Viewing now" vs "viewed, inactive" — needs to be comfortably longer than
 // one heartbeat interval so a normal gap between beats never flickers
@@ -69,8 +76,8 @@ export default function WarRoomView({ incident, org, lookups, members, showToast
   // of silently overwritten.
   const baselineRef = useRef({ what_we_know: "", what_tried: "", whats_next: "" });
   const saveTimers = useRef({});
-  const stateRef = useRef({ narrative, comments, warRoom });
-  stateRef.current = { narrative, comments, warRoom };
+  const stateRef = useRef({ narrative, comments, warRoom, participants });
+  stateRef.current = { narrative, comments, warRoom, participants };
 
   const emailFor = useCallback((userId) => {
     if (!userId) return "System";
@@ -289,7 +296,7 @@ export default function WarRoomView({ incident, org, lookups, members, showToast
   }, [warRoom?.id, incident.resolved_at]);
 
   async function runMonitorCheck() {
-    const { narrative: n, comments: c, warRoom: wr } = stateRef.current;
+    const { narrative: n, comments: c, warRoom: wr, participants: p } = stateRef.current;
     if (!wr) return;
     const lastSystemComment = [...c].reverse().find((x) => x.author_type === "system");
     const cooldownOk = !lastSystemComment || (Date.now() - new Date(lastSystemComment.created_at).getTime()) > NUDGE_COOLDOWN_MS;
@@ -298,6 +305,18 @@ export default function WarRoomView({ incident, org, lookups, members, showToast
     const staleMinutes = (Date.now() - new Date(wr.last_narrative_update_at).getTime()) / 60000;
     if (staleMinutes >= STALE_MINUTES_THRESHOLD) {
       await postSystemComment(`This narrative hasn't been updated in about ${Math.round(staleMinutes)} minutes — worth a quick update on where things stand?`, wr.id);
+      loadComments(wr.id);
+      return;
+    }
+
+    // Bystander check — a crowd assuming someone else is driving looks
+    // identical, from the outside, to a well-coordinated one. Reuses the
+    // narrative-staleness clock as "last activity" too, since a narrative
+    // edit is exactly as much "someone's doing something" as a comment.
+    const viewingNow = p.filter((x) => x.status === "viewing_now").length;
+    const lastAnyActivity = Math.max(wr.last_narrative_update_at ? new Date(wr.last_narrative_update_at).getTime() : 0, c.length ? new Date(c[c.length - 1].created_at).getTime() : 0);
+    if (viewingNow >= BYSTANDER_MIN_VIEWERS && Date.now() - lastAnyActivity > BYSTANDER_QUIET_MS) {
+      await postSystemComment(`${viewingNow} people are here but it's been quiet for a bit — anyone have a quick update, even "still investigating"?`, wr.id);
       loadComments(wr.id);
       return;
     }

@@ -25,6 +25,7 @@ export default function TrackPage({ token }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [error, setError] = useState("");
+  const [typicalHours, setTypicalHours] = useState(null);
   const [showReopen, setShowReopen] = useState(false);
   const [reopenReason, setReopenReason] = useState("");
   const [reopening, setReopening] = useState(false);
@@ -42,6 +43,15 @@ export default function TrackPage({ token }) {
     setStatus(row);
     setComments(c.data || []);
     setAttachments(a.data || []);
+    // A real, computed median from this org's own past resolutions in the
+    // same category+severity — never a marketed SLA promise. The RPC
+    // itself withholds the row entirely below a 5-sample floor, so an
+    // empty result here means "don't show this," not "0 hours."
+    if (!row.resolved_at) {
+      const { data: eta } = await supabase.rpc("get_typical_resolution_for_customer", { track_token: token });
+      const etaRow = Array.isArray(eta) ? eta[0] : eta;
+      setTypicalHours(etaRow?.typical_hours ?? null);
+    }
   }, [token]);
 
   useEffect(() => { load(); }, [load]);
@@ -107,6 +117,11 @@ export default function TrackPage({ token }) {
               <div className="text-xs px-2 py-0.5 rounded-full inline-block" style={{ background: status.resolved_at ? COLORS.teal + "22" : COLORS.amber + "22", color: status.resolved_at ? COLORS.teal : COLORS.amber }}>
                 {status.resolved_at ? "Resolved" : status.status_name || "In progress"}
               </div>
+              {!status.resolved_at && typicalHours != null && (
+                <p className="text-xs mt-1.5" style={{ color: COLORS.faint }}>
+                  Issues like this have typically been sorted out within about {typicalHours < 1 ? "an hour" : `${Math.round(typicalHours)} hour${Math.round(typicalHours) !== 1 ? "s" : ""}`} here.
+                </p>
+              )}
               {status.can_reopen && !showReopen && (
                 <button onClick={() => setShowReopen(true)} className="block mt-2 text-xs underline" style={{ color: COLORS.amber }}>Still not fixed? Reopen this</button>
               )}

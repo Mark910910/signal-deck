@@ -77,6 +77,10 @@ const STALE_THRESHOLD_MS = 5 * 86400000;
 function lastActivityAt(incident) {
   return (incident.incident_timeline || []).reduce((max, t) => Math.max(max, new Date(t.ts).getTime()), new Date(incident.created_at).getTime());
 }
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
 // Existing orgs have no template_id (onboarding was never touched by the
 // template system) — default to everything enabled, exactly current
 // behavior, unless explicitly turned off. Template-assigned orgs get the
@@ -424,6 +428,7 @@ function MainApp({ org, onOrgUpdated, initialWarRoomIncidentId }) {
   const [warRoomId, setWarRoomId] = useState(null);
   const [incidentListInit, setIncidentListInit] = useState(null);
   const [openProblemId, setOpenProblemId] = useState(null);
+  const [pendingQuoteTemplate, setPendingQuoteTemplate] = useState(null);
   const [toast, setToast] = useState(null); // { message, kind } | null
   const [tick, setTick] = useState(0);
   const [ambientFlag, setAmbientFlag] = useState(null); // { type, incidentId, title, displayId }
@@ -622,8 +627,10 @@ function MainApp({ org, onOrgUpdated, initialWarRoomIncidentId }) {
           )}
           {tab === "diagnostics" && <Diagnostics org={org} lookups={lookups} />}
           {tab === "problems" && <ProblemsView org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onNavigatePreventatives={() => setTab("preventatives")} initialProblemId={openProblemId} onProblemOpened={() => setOpenProblemId(null)} />}
-          {tab === "assets" && <AssetsView org={org} lookups={lookups} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
-          {tab === "vendors" && <VendorsView org={org} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} />}
+          {tab === "assets" && <AssetsView org={org} lookups={lookups} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }}
+            onRequestQuote={(template) => { setPendingQuoteTemplate(template); setTab("vendors"); }} />}
+          {tab === "vendors" && <VendorsView org={org} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }}
+            initialQuoteTemplate={pendingQuoteTemplate} onQuoteTemplateConsumed={() => setPendingQuoteTemplate(null)} />}
           {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onOpenProblem={(id) => { setOpenProblemId(id); setTab("problems"); }} />}
           {tab === "dashboards" && <CustomDashboards org={org} lookups={lookups} incidents={incidents} showToast={showToast} />}
           {tab === "privacy" && <PrivacyCenter org={org} onOrgUpdated={onOrgUpdated} incidents={incidents} showToast={showToast} />}
@@ -885,6 +892,22 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
       .then(({ count }) => setAutomationNeedsReview(count || 0));
   }, [org?.id, incidents]);
 
+  // Deflection is Signal Deck's own stated differentiator, but it only
+  // ever became visible to staff after it FAILED (deflection_context on
+  // an incident that got filed anyway). The successful cases — someone
+  // reading a suggested article and never filing anything — previously
+  // just evaporated. All-time, not "this week": kb_articles.helpful_count
+  // is a running total with no per-vote timestamp to window by, so a
+  // time-boxed figure isn't honestly available without new event-level
+  // tracking (flagged separately, not built here) — an all-time count is
+  // still real and still worth surfacing, just framed as such.
+  const [deflectionCount, setDeflectionCount] = useState(null);
+  useEffect(() => {
+    if (!org?.id) return;
+    supabase.from("kb_articles").select("helpful_count").eq("org_id", org.id)
+      .then(({ data }) => setDeflectionCount((data || []).reduce((sum, a) => sum + (a.helpful_count || 0), 0)));
+  }, [org?.id]);
+
   return (
     <div>
       {automationNeedsReview > 0 && (
@@ -904,6 +927,11 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
         <StatCard icon={CheckCircle2} label="Resolved Today" value={resolvedToday.length} color={COLORS.teal}
           onClick={() => onNavigateIncidents({ filter: "resolved", quickFilter: null })} />
       </div>
+      {!!deflectionCount && (
+        <p className="text-xs mb-4 flex items-center gap-1.5" style={{ color: COLORS.faint }}>
+          <BookOpen size={12} /> {deflectionCount} issue{deflectionCount !== 1 ? "s" : ""} answered by the knowledge base before anyone had to file a ticket, all time.
+        </p>
+      )}
       <Panel title={`Open ${getTerm(org, "incidents", "incidents").toLowerCase()}`} icon={Radio}>
         <p className="text-[10px] -mt-1 mb-2" style={{ color: COLORS.faint }}>Sorted by urgency — breached first, then severity — not by when it was logged.</p>
         <div className="divide-y" style={{ borderColor: COLORS.border }}>
@@ -919,8 +947,11 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
                   <StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
                   <AssigneeIndicator incident={inc} members={members} />
                 </div>
-                {(inc.escalated_at || inc.approval_status === "pending") && (
+                {(inc.escalated_at || inc.approval_status === "pending" || inc.is_practice) && (
                   <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                    {inc.is_practice && (
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.faint, background: COLORS.faint + "22" }}>PRACTICE</span>
+                    )}
                     <EscalatedBadge incident={inc} />
                     {inc.approval_status === "pending" && (
                       <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
@@ -1324,8 +1355,11 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
                   most incidents) — kept structurally and visually apart
                   from row 1's routine state so an alert reads as an
                   alert, not as one more pill in a flat list. */}
-              {(inc.record_type === "service_request" || inc.escalated_at || inc.approval_status === "pending") && (
+              {(inc.record_type === "service_request" || inc.escalated_at || inc.approval_status === "pending" || inc.is_practice) && (
                 <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                  {inc.is_practice && (
+                    <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.faint, background: COLORS.faint + "22" }}>PRACTICE</span>
+                  )}
                   {inc.record_type === "service_request" && (
                     <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.teal, background: COLORS.teal + "22" }}>REQUEST</span>
                   )}
@@ -1359,6 +1393,18 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
                 {!inc.resolved_at && (
                   <span className="text-[11px]" style={{ color: (Date.now() - lastActivityAt(inc) > STALE_THRESHOLD_MS) ? COLORS.amber : COLORS.muted }}>
                     {" · "}last activity {timeAgo(new Date(lastActivityAt(inc)).toISOString())} ago
+                  </span>
+                )}
+                {/* Optional, blank-by-default — an org that never sets an
+                    hourly rate in Settings sees nothing different here.
+                    Status-time only (computeTimeInStatus), not manual
+                    time_spent logs — those need a per-incident fetch this
+                    row-level display can't afford across a whole list, so
+                    this is a partial figure, labeled as such rather than
+                    presented as complete. */}
+                {!inc.resolved_at && org.hourly_rate > 0 && (
+                  <span className="text-[11px]" style={{ color: COLORS.faint }}>
+                    {" · "}≈R{Math.round((computeTimeInStatus(inc, lookups.statuses).reduce((s, b) => s + b.ms, 0) / 3600000) * org.hourly_rate).toLocaleString()} so far
                   </span>
                 )}
               </div>
@@ -1677,6 +1723,35 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
   const [rcaCategoryId, setRcaCategoryId] = useState(incident.rca_category?.id || "");
   const [resolutionClass, setResolutionClass] = useState(incident.resolution_class || "");
   const [aiLoading, setAiLoading] = useState("");
+
+  // Recurrence nudge — surfaced independently by both ui-designer and
+  // usability-expert's innovation passes as their top pick: the moment
+  // someone picks a root cause category to resolve with is exactly the
+  // moment they have full context on whether this keeps happening, and
+  // exactly the moment ITSM practice otherwise leaves to a separate,
+  // easy-to-forget dashboard review. Pure client-side arithmetic over
+  // `incidents`, already loaded — rca_category is only ever populated
+  // post-resolution (existing comment elsewhere in this file), so this
+  // counts OTHER already-resolved incidents sharing the picked category,
+  // then adds one for the incident currently being resolved.
+  const recurrenceCount = useMemo(() => {
+    if (!rcaCategoryId) return 0;
+    const cutoff = Date.now() - 30 * 86400000;
+    return incidents.filter((i) => i.id !== incident.id && i.rca_category?.id === rcaCategoryId && i.resolved_at && new Date(i.resolved_at).getTime() > cutoff).length;
+  }, [incidents, rcaCategoryId, incident.id]);
+
+  // Mirrors ProblemLinkPanel's own createAndLink() — that panel isn't
+  // reachable from here without a larger prop-sharing refactor, so this
+  // stays a small, deliberate duplication rather than one.
+  async function logRecurrenceAsProblem() {
+    const displayId = `PRB-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const { data: { session } } = await supabase.auth.getSession();
+    const { data: prob } = await supabase.from("problems").insert({
+      org_id: org.id, display_id: displayId, title: redactPII(incident.title), rca_category_id: rcaCategoryId || null, created_by: session?.user?.id || null,
+    }).select().single();
+    if (prob) await supabase.from("problem_incidents").insert({ problem_id: prob.id, incident_id: incident.id, org_id: org.id });
+    showToast("Logged as a Problem"); onChanged();
+  }
 
   // Whether a War Room already exists for this incident, independent of its
   // CURRENT severity/resolved state. Found live: the button was gated only
@@ -2048,6 +2123,14 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
                 </select>
               </Field>
               <button onClick={suggestRCA} disabled={aiLoading === "rca"} className="sd-btn-g mb-3">{aiLoading === "rca" ? "Thinking…" : "AI: suggest category"}</button>
+              {recurrenceCount >= 3 && (
+                <div className="mb-3 p-2.5 rounded-lg flex items-center justify-between gap-2" style={{ background: COLORS.violet + "14", border: `1px solid ${COLORS.violet}44` }}>
+                  <span className="text-xs" style={{ color: COLORS.violet }}>
+                    This is the {ordinal(recurrenceCount + 1)} "{lookups.rcaCategories.find((r) => r.id === rcaCategoryId)?.name}" incident this month. Log it as a Problem?
+                  </span>
+                  <button onClick={logRecurrenceAsProblem} className="text-xs font-semibold shrink-0 underline" style={{ color: COLORS.violet }}>Log it</button>
+                </div>
+              )}
               <Field label="Resolution classification">
                 <select value={resolutionClass} onChange={(e) => setResolutionClass(e.target.value)} className="sd-in3">
                   <option value="">Choose…</option>
@@ -2234,6 +2317,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
   const [emailSenderName, setEmailSenderName] = useState(org.email_sender_name || "");
   const [slack, setSlack] = useState(org.slack_webhook || "");
   const [teams, setTeams] = useState(org.teams_webhook || "");
+  const [hourlyRate, setHourlyRate] = useState(org.hourly_rate || "");
   const [newGroup, setNewGroup] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [newRca, setNewRca] = useState("");
@@ -2242,6 +2326,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
     const { data } = await supabase.from("organisations").update({
       name: orgName, information_officer_name: ioName, information_officer_email: ioEmail,
       slack_webhook: slack, teams_webhook: teams, email_sender_name: emailSenderName || null,
+      hourly_rate: hourlyRate ? parseFloat(hourlyRate) : null,
     }).eq("id", org.id).select().single();
     onOrgUpdated({ ...org, ...data });
     showToast("Saved");
@@ -2265,6 +2350,13 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
     if (error) { showToast(error.message); return; }
     onOrgUpdated({ ...org, portal_slug: data });
     showToast("Portal link rotated — the old link no longer works");
+  }
+
+  async function tryAsCustomer() {
+    const { error } = await supabase.rpc("arm_portal_practice_mode");
+    if (error) { showToast(error.message); return; }
+    showToast("Go ahead and submit something — it'll show up tagged (practice) for the next 15 minutes");
+    window.open(portalUrl, "_blank");
   }
 
   async function exportSlaReport() {
@@ -2332,6 +2424,9 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
           <Field label="Information Officer email"><input value={ioEmail} onChange={(e) => setIoEmail(e.target.value)} className="sd-in5" /></Field>
           <Field label="Slack webhook"><input value={slack} onChange={(e) => setSlack(e.target.value)} className="sd-in5" placeholder="https://hooks.slack.com/…" /></Field>
           <Field label="Teams webhook"><input value={teams} onChange={(e) => setTeams(e.target.value)} className="sd-in5" placeholder="https://…webhook.office.com/…" /></Field>
+          <Field label="Hourly cost rate (optional) — shows a rough running cost next to incidents, using time already logged. Leave blank to hide it entirely.">
+            <input type="number" value={hourlyRate} onChange={(e) => setHourlyRate(e.target.value)} className="sd-in5" placeholder="e.g. 350" />
+          </Field>
           <button onClick={saveOrg} className="sd-btn-p6">Save</button>
         </Panel>
 
@@ -2342,6 +2437,12 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
             <button onClick={copyPortalLink} className="sd-btn-p6 flex items-center gap-1.5">{copied ? <Check size={13} /> : <Copy size={13} />}</button>
           </div>
           <button onClick={rotateLink} className="text-xs" style={{ color: COLORS.muted }}>Rotate link (invalidates the one above)</button>
+          {/* One button, before anything else needs reading or trusting —
+              the real portal flow, real RPCs, real data; the next
+              submission through this link in the next 15 minutes is just
+              clearly tagged everywhere it appears, never mistaken for a
+              real customer report. */}
+          <button onClick={tryAsCustomer} className="text-xs block mt-2" style={{ color: COLORS.teal }}>See what a customer sees — try it now →</button>
         </Panel>
 
         <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
@@ -2914,6 +3015,34 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
     return { beforeCount, afterCount, daysElapsedAfter, pctChange, tooEarly: daysElapsedAfter < 7 };
   }
 
+  // Durability re-check — the effectiveness measurement above is a
+  // snapshot taken once, at whatever point someone looks; nothing
+  // previously caught a fix that looked "confirmed working" at 30 days
+  // quietly decaying months later (the new process stops being followed,
+  // an unrelated change reverts the config). Re-runs the same rate math
+  // over a longer trailing window, only for items already old enough for
+  // that longer window to mean anything.
+  const DURABILITY_WINDOW_DAYS = 90;
+  function computeDurability(p) {
+    if (!p.closed_at || !p.rca_categories?.id) return null;
+    const closedTime = new Date(p.closed_at).getTime();
+    const daysElapsed = Math.floor((now - closedTime) / 86400000);
+    if (daysElapsed < DURABILITY_WINDOW_DAYS) return null;
+    const beforeStart = closedTime - WINDOW_DAYS * 86400000;
+    const beforeCount = incidents.filter((i) =>
+      i.rca_category?.id === p.rca_categories.id &&
+      new Date(i.created_at).getTime() >= beforeStart && new Date(i.created_at).getTime() < closedTime
+    ).length;
+    const beforeRate = beforeCount / WINDOW_DAYS;
+    const longAfterCount = incidents.filter((i) =>
+      i.rca_category?.id === p.rca_categories.id &&
+      new Date(i.created_at).getTime() >= closedTime && new Date(i.created_at).getTime() <= closedTime + DURABILITY_WINDOW_DAYS * 86400000
+    ).length;
+    const longAfterRate = longAfterCount / DURABILITY_WINDOW_DAYS;
+    const longPctChange = beforeRate > 0 ? Math.round(((beforeRate - longAfterRate) / beforeRate) * 100) : null;
+    return { longPctChange };
+  }
+
   let list = items;
   if (filter === "open") list = items.filter((p) => p.status === "open" || p.status === "in_progress");
   if (filter === "overdue") list = items.filter(isOverdue);
@@ -2975,6 +3104,11 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
       <div className="rounded-xl divide-y" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
         {list.map((p) => {
           const eff = filter === "effectiveness" || p.status === "done" ? computeEffectiveness(p) : null;
+          // Only worth checking for durability once it actually looked
+          // like it worked — no point flagging "regression" on something
+          // that was never confirmed effective in the first place.
+          const durability = eff && !eff.tooEarly && eff.pctChange >= 20 ? computeDurability(p) : null;
+          const regressed = durability && durability.longPctChange !== null && durability.longPctChange < 20;
           return (
             <div key={p.id} className="p-3.5" style={{ opacity: p.status === "done" || p.status === "wont_fix" ? 0.85 : 1 }}>
               <div className="flex items-start justify-between gap-3 mb-1.5">
@@ -3029,6 +3163,11 @@ function PreventativesTracker({ org, lookups, incidents, showToast, onOpenIncide
                     </>
                   )}
                 </div>
+              )}
+              {regressed && (
+                <p className="text-[11px] mt-1.5 flex items-center gap-1" style={{ color: COLORS.amber }}>
+                  <AlertTriangle size={11} /> Regression risk — incidents in this category picked back up after an initial improvement.
+                </p>
               )}
             </div>
           );
@@ -4337,7 +4476,7 @@ function ServiceCatalogPanel({ org, lookups, onLookupsChanged, showToast }) {
 // multiple unreconciled discovery sources. One person enters what they
 // actually know, and "last reviewed" is a manual confirmation, not a
 // background job silently trusting or retiring records on its own.
-function AssetsView({ org, lookups, showToast, onOpenIncident }) {
+function AssetsView({ org, lookups, showToast, onOpenIncident, onRequestQuote }) {
   const [items, setItems] = useState([]);
   const [selected, setSelected] = useState(null);
   const [filterType, setFilterType] = useState("");
@@ -4380,7 +4519,7 @@ function AssetsView({ org, lookups, showToast, onOpenIncident }) {
   };
 
   if (selected) {
-    return <AssetDetail item={selected} org={org} lookups={lookups} items={items} onBack={() => setSelected(null)} onChanged={load} onOpenIncident={onOpenIncident} showToast={showToast} />;
+    return <AssetDetail item={selected} org={org} lookups={lookups} items={items} onBack={() => setSelected(null)} onChanged={load} onOpenIncident={onOpenIncident} showToast={showToast} onRequestQuote={onRequestQuote} />;
   }
 
   return (
@@ -4448,7 +4587,7 @@ function AssetsView({ org, lookups, showToast, onOpenIncident }) {
   );
 }
 
-function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncident, showToast }) {
+function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncident, showToast, onRequestQuote }) {
   const [relatedIncidents, setRelatedIncidents] = useState([]);
   const [relationships, setRelationships] = useState([]);
   const [pickRelated, setPickRelated] = useState("");
@@ -4558,7 +4697,22 @@ function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncid
             </select>
           </Field>
         </div>
-        <button onClick={saveLifecycle} className="sd-btn-g">Save</button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={saveLifecycle} className="sd-btn-g">Save</button>
+          {/* Bridges two already-built, already-good features that never
+              talked to each other — noticing an expiry and starting a
+              renewal quote used to mean leaving this screen entirely and
+              re-typing what was just seen. Not automatic: this only ever
+              pre-fills the RFQ form on the Vendors tab, a person still
+              reviews and sends it. */}
+          {((item.warranty_expiry && new Date(item.warranty_expiry).getTime() < Date.now() + 30 * 86400000) ||
+            (item.license_expiry && new Date(item.license_expiry).getTime() < Date.now() + 30 * 86400000)) && (
+            <button onClick={() => onRequestQuote?.({ description: `Renewal: ${item.name}`, vendorId: item.purchase_vendor_id || "" })}
+              className="text-xs font-semibold" style={{ color: COLORS.red }}>
+              Request a renewal quote →
+            </button>
+          )}
+        </div>
       </Panel>
 
       <Panel title="Relationships" icon={Link2}>
@@ -4980,7 +5134,7 @@ function SLAPoliciesPanel({ org, lookups, onLookupsChanged, showToast }) {
 // after a dispute. Vendor issues link to the existing incident engine —
 // the scorecard is derived from incidents already being tracked, not a
 // separate analytics system.
-function VendorsView({ org, showToast, onOpenIncident }) {
+function VendorsView({ org, showToast, onOpenIncident, initialQuoteTemplate, onQuoteTemplateConsumed }) {
   const [vendors, setVendors] = useState([]);
   const [selected, setSelected] = useState(null);
   const [name, setName] = useState("");
@@ -5036,7 +5190,8 @@ function VendorsView({ org, showToast, onOpenIncident }) {
         </div>
       </Panel>
 
-      <QuoteRequestsPanel org={org} vendors={vendors} onOpenIncident={onOpenIncident} showToast={showToast} />
+      <QuoteRequestsPanel org={org} vendors={vendors} onOpenIncident={onOpenIncident} showToast={showToast}
+        initialTemplate={initialQuoteTemplate} onTemplateConsumed={onQuoteTemplateConsumed} />
     </div>
   );
 }
@@ -5562,13 +5717,25 @@ function RiskSignalsPanel({ incident, org }) {
 // SME procurement teams value most, and the exact mechanism the leading
 // SME-focused competitor is praised for. No cap on invited vendors,
 // unlike that competitor's own free tier (capped at three).
-function QuoteRequestsPanel({ org, vendors, onOpenIncident, showToast }) {
+function QuoteRequestsPanel({ org, vendors, onOpenIncident, showToast, initialTemplate, onTemplateConsumed }) {
   const [requests, setRequests] = useState([]);
   const [selected, setSelected] = useState(null);
   const [description, setDescription] = useState("");
   const [pickedVendorIds, setPickedVendorIds] = useState([]);
   const [openIncidents, setOpenIncidents] = useState([]);
   const [linkedIncidentId, setLinkedIncidentId] = useState("");
+
+  // Bridges CMDB expiry directly into this form instead of leaving
+  // whoever noticed the expiry to come here and re-type what they
+  // already knew — same cross-tab pre-fill pattern already used for
+  // Problems (initialProblemId/onProblemOpened).
+  useEffect(() => {
+    if (!initialTemplate) return;
+    setDescription(initialTemplate.description || "");
+    if (initialTemplate.vendorId) setPickedVendorIds([initialTemplate.vendorId]);
+    onTemplateConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTemplate]);
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("quote_requests").select("*, incidents(display_id, title)").order("created_at", { ascending: false });
@@ -5662,12 +5829,33 @@ function QuoteRequestsPanel({ org, vendors, onOpenIncident, showToast }) {
 function QuoteRequestDetail({ request, org, onBack, onChanged, onOpenIncident, showToast }) {
   const [responses, setResponses] = useState([]);
   const [copiedVendorId, setCopiedVendorId] = useState(null);
+  const [lastPurchaseByVendor, setLastPurchaseByVendor] = useState({});
 
   const load = useCallback(async () => {
     const { data } = await supabase.from("quote_request_vendors").select("*, vendors(name)").eq("quote_request_id", request.id).order("quoted_price", { ascending: true, nullsFirst: false });
     setResponses(data || []);
   }, [request.id]);
   useEffect(() => { load(); }, [load]);
+
+  // Price memory — nothing here ranks or flags the new quote against it,
+  // just surfaces what this same vendor was actually paid last time,
+  // right where a number needs calibrating against something. That
+  // history already exists (vendor_purchases) but otherwise evaporates
+  // the moment a purchase record is created — no vendor/purchase schema
+  // change needed, this is a plain read of data already there.
+  useEffect(() => {
+    if (responses.length === 0) return;
+    (async () => {
+      const vendorIds = [...new Set(responses.map((r) => r.vendor_id))];
+      const { data } = await supabase.from("vendor_purchases")
+        .select("vendor_id, agreed_price, description, created_at")
+        .in("vendor_id", vendorIds).not("agreed_price", "is", null)
+        .order("created_at", { ascending: false });
+      const byVendor = {};
+      (data || []).forEach((row) => { if (!byVendor[row.vendor_id]) byVendor[row.vendor_id] = row; });
+      setLastPurchaseByVendor(byVendor);
+    })();
+  }, [responses]);
 
   // The token was previously only ever used once, to build the emailed
   // link at creation time, then never surfaced again — if that email never
@@ -5727,6 +5915,11 @@ function QuoteRequestDetail({ request, org, onBack, onChanged, onOpenIncident, s
               )}
               {r.notes && <p className="text-xs mt-1" style={{ color: COLORS.muted }}>{r.notes}</p>}
               {r.valid_until && <p className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>Valid until {r.valid_until}</p>}
+              {lastPurchaseByVendor[r.vendor_id] && (
+                <p className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>
+                  Last paid: R{lastPurchaseByVendor[r.vendor_id].agreed_price} ({new Date(lastPurchaseByVendor[r.vendor_id].created_at).toLocaleDateString("en-ZA", { month: "short", year: "numeric" })}, "{lastPurchaseByVendor[r.vendor_id].description}")
+                </p>
+              )}
               {r.quoted_price != null && request.status !== "awarded" && (
                 <button onClick={() => award(r.vendor_id)} className="text-xs mt-2 px-2.5 py-1 rounded-lg font-semibold" style={{ background: COLORS.teal, color: "#0A1120" }}>Award to this vendor</button>
               )}
