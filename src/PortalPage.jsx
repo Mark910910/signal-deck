@@ -30,6 +30,7 @@ export default function PortalPage({ slug }) {
   const [copied, setCopied] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [feedbackGiven, setFeedbackGiven] = useState({});
+  const [terminology, setTerminology] = useState({});
   // Maps article id -> title, not just a Set of ids — later searches
   // replace `suggestions` entirely, so by the time someone actually
   // submits, an article shown a minute ago (on an earlier, since-refined
@@ -38,9 +39,13 @@ export default function PortalPage({ slug }) {
 
   useEffect(() => {
     (async () => {
-      const { data, error } = await supabase.rpc("portal_categories", { slug });
-      if (error) { setError("This link doesn't look right — please check it with whoever gave it to you."); return; }
-      setCategories(data || []);
+      const [catRes, termRes] = await Promise.all([
+        supabase.rpc("portal_categories", { slug }),
+        supabase.rpc("portal_org_terminology", { slug }),
+      ]);
+      if (catRes.error) { setError("This link doesn't look right — please check it with whoever gave it to you."); return; }
+      setCategories(catRes.data || []);
+      setTerminology(termRes.data || {});
       // Previously auto-selected data[0].name — whatever sorted first
       // alphabetically got silently chosen for the customer, with no
       // indication a choice had even been made and no guidance on what any
@@ -109,6 +114,17 @@ export default function PortalPage({ slug }) {
     setCopied(true); setTimeout(() => setCopied(false), 1800);
   }
 
+  // The org's own vocabulary, not a hardcoded "issue" — was silently
+  // generic for every template (an HR "Case" or a vendor "Vendor Issue"
+  // saw the exact same copy an IT org does), while the category dropdown
+  // one field below already got this right. Fallback matches what every
+  // untemplated org already saw, so nothing changes for them.
+  const term = terminology.incident || "issue";
+  const article = /^[aeiou]/i.test(term) ? "an" : "a";
+  // Customer-facing display only — the real INC-prefixed identifier is a
+  // documented, stable API contract elsewhere and isn't touched here.
+  const displayNum = (confirmed?.display_id || "").replace(/^[A-Za-z]+-/, "");
+
   if (confirmed) {
     return (
       <Centered>
@@ -116,7 +132,7 @@ export default function PortalPage({ slug }) {
           <CheckCircle2 size={32} color={COLORS.teal} className="mx-auto mb-3" />
           <h1 className="text-lg font-semibold mb-2" style={{ color: COLORS.text }}>Thanks — it's logged</h1>
           <p className="text-sm mb-1" style={{ color: COLORS.muted }}>Reference number:</p>
-          <p className="text-base font-mono mb-4" style={{ color: COLORS.amber }}>{confirmed.display_id}</p>
+          <p className="text-base font-mono mb-4" style={{ color: COLORS.amber }}>{term} #{displayNum}</p>
           <div className="p-2.5 rounded-lg mb-3" style={{ background: COLORS.bg, border: `1px solid ${COLORS.border}` }}>
             <p className="text-xs mb-2" style={{ color: COLORS.muted }}>Save this link to check for updates or add a message — it's the only way back in, there's no account or password.</p>
             <div className="flex items-center gap-2">
@@ -135,7 +151,7 @@ export default function PortalPage({ slug }) {
       <div className="w-full max-w-sm p-6 rounded-xl" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
         <div className="flex items-center gap-2 mb-4">
           <Anchor size={18} color={COLORS.amber} />
-          <span className="text-base font-semibold" style={{ color: COLORS.text }}>Report an issue</span>
+          <span className="text-base font-semibold" style={{ color: COLORS.text }}>Report {article} {term.toLowerCase()}</span>
         </div>
         <p className="text-xs mb-4" style={{ color: COLORS.muted }}>No account needed. Please don't include your name, ID number, or contact details in the description below — just describe the problem.</p>
 

@@ -749,6 +749,19 @@ function EscalatedBadge({ incident }) {
     </span>
   );
 }
+// Same reasoning as EscalatedBadge: acknowledged_at is a real, independent
+// timestamp, but there's no guaranteed "Acknowledged" row in an org's own
+// configurable statuses list to advance Status into — so this stays its
+// own small badge in row 1 (routine-good news, not an exception) rather
+// than trying to fold it into StatusPill.
+function AcknowledgedBadge({ incident }) {
+  if (!incident.acknowledged_at || incident.resolved_at) return null;
+  return (
+    <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0" style={{ color: COLORS.teal, background: COLORS.teal + "22" }}>
+      <Check size={10} /> ACK
+    </span>
+  );
+}
 // Assignee is trackable (there are dedicated "Assigned to me"/"Unassigned"
 // quick filters in IncidentList) but was invisible on every card — a
 // manager scanning the list had no way to see who, if anyone, already has
@@ -945,6 +958,7 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
                   <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
                   <SeverityPill name={inc.severity?.name} />
                   <StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
+                  <AcknowledgedBadge incident={inc} />
                   <AssigneeIndicator incident={inc} members={members} />
                 </div>
                 {(inc.escalated_at || inc.approval_status === "pending" || inc.is_practice) && (
@@ -1348,6 +1362,7 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
               <div className="flex items-center gap-1.5 mb-1">
                 <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
                 <SeverityPill name={inc.severity?.name} /><StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
+                <AcknowledgedBadge incident={inc} />
                 <AssigneeIndicator incident={inc} members={members} />
               </div>
               {/* Row 2 — exceptions only. Rendered at all only when
@@ -1791,7 +1806,15 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
     const res = await askAI(`You are an ITSM assistant. Pick the single best-fitting root cause category from this exact list: ${names}. Respond with ONLY the category name, nothing else.`,
       `Title: ${redactPII(incident.title)}\nNotes: ${redactPII(incident.notes || "")}`);
     const match = lookups.rcaCategories.find((r) => res && res.trim().toLowerCase().includes(r.name.toLowerCase()));
-    if (match) setRcaCategoryId(match.id);
+    if (match) {
+      setRcaCategoryId(match.id);
+      // Persisted immediately, same as suggestMitigation() four lines up —
+      // previously local-state-only, so a reload before hitting "Resolve"
+      // silently reverted the pick with no warning. resolve() already
+      // writes rca_category_id again at the end of the flow, so this just
+      // makes that write idempotent against a value that's already there.
+      await supabase.from("incidents").update({ rca_category_id: match.id }).eq("id", incident.id);
+    }
     setAiLoading("");
   }
 
@@ -1917,6 +1940,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
         <div className="flex items-center gap-2 flex-wrap mb-2">
           <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{incident.display_id}</span>
           <SeverityPill name={incident.severity?.name} /><StatusPill name={incident.status?.name} statusId={incident.status?.id} statuses={lookups.statuses} />
+          <AcknowledgedBadge incident={incident} />
           <AssigneeIndicator incident={incident} members={members} />
         </div>
         <p className="text-sm" style={{ color: COLORS.muted }}>{incident.notes}</p>
@@ -2309,6 +2333,32 @@ function PrivacyCenter({ org, onOrgUpdated, incidents, showToast }) {
   );
 }
 
+// Replaces a one-time "armed for 15 minutes" toast with a persistent,
+// self-clearing state — a staff member who gets pulled away mid-window
+// previously had no way to tell it had lapsed, and a stale belief that
+// practice mode is still on risks a real customer submission going
+// through unlabeled. org.practice_armed_until is already loaded with the
+// rest of the org row, so this needs no extra query — just a tick.
+function PracticeModeBanner({ org }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (!org.practice_armed_until) return;
+    const id = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [org.practice_armed_until]);
+  if (!org.practice_armed_until) return null;
+  const msLeft = new Date(org.practice_armed_until).getTime() - Date.now();
+  if (msLeft <= 0) return null;
+  const mins = Math.floor(msLeft / 60000);
+  const secs = Math.floor((msLeft % 60000) / 1000);
+  return (
+    <div className="flex items-center gap-1.5 text-xs mt-2 px-2.5 py-1.5 rounded-lg" style={{ background: COLORS.teal + "18", border: `1px solid ${COLORS.teal}44`, color: COLORS.teal }}>
+      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: COLORS.teal }} />
+      Practice mode active — {mins}:{String(secs).padStart(2, "0")} left. Submissions through this link right now are tagged (practice), not a real report.
+    </div>
+  );
+}
+
 /* =================================== SETTINGS ================================ */
 function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
   const [orgName, setOrgName] = useState(org.name);
@@ -2355,7 +2405,10 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
   async function tryAsCustomer() {
     const { error } = await supabase.rpc("arm_portal_practice_mode");
     if (error) { showToast(error.message); return; }
-    showToast("Go ahead and submit something — it'll show up tagged (practice) for the next 15 minutes");
+    // Optimistic — matches the 15-minute window arm_portal_practice_mode
+    // actually sets server-side, so the countdown banner below appears
+    // immediately instead of waiting on a full org refetch.
+    onOrgUpdated({ ...org, practice_armed_until: new Date(Date.now() + 15 * 60000).toISOString() });
     window.open(portalUrl, "_blank");
   }
 
@@ -2443,6 +2496,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
               clearly tagged everywhere it appears, never mistaken for a
               real customer report. */}
           <button onClick={tryAsCustomer} className="text-xs block mt-2" style={{ color: COLORS.teal }}>See what a customer sees — try it now →</button>
+          <PracticeModeBanner org={org} />
         </Panel>
 
         <TemplateSettingsPanel org={org} onOrgUpdated={onOrgUpdated} showToast={showToast} />
@@ -4942,6 +4996,29 @@ function computeTimeInStatus(incident, statuses) {
   return Object.entries(buckets).map(([name, ms]) => ({ name, ms })).sort((a, b) => b.ms - a.ms);
 }
 
+// Largest-remainder apportionment — each bucket's exact ms has its own
+// fractional minute, and floor(a) + floor(b) is mathematically never
+// guaranteed to equal floor(a+b): flooring every row independently, the
+// way the Total is already computed, made "5m + 1m + 10m manual" display
+// next to a Total of "17m" with no visible way to get there. This
+// redistributes the whole minutes the Total's own floor is owed — same
+// method used anywhere displayed rounded parts must sum to a displayed
+// rounded total (e.g. seat apportionment) — so the rows always add up to
+// exactly what Total shows, with no change to Total's own math.
+function apportionMinutes(buckets, manualMs) {
+  const manualMinutes = Math.round(manualMs / 60000);
+  const withExact = buckets.map((b) => {
+    const exact = b.ms / 60000;
+    const floor = Math.floor(exact);
+    return { name: b.name, floor, remainder: exact - floor };
+  });
+  const flooredTotal = Math.floor(buckets.reduce((s, b) => s + b.ms, 0) / 60000 + manualMinutes);
+  const flooredSum = withExact.reduce((s, b) => s + b.floor, 0) + manualMinutes;
+  const deficit = Math.max(0, flooredTotal - flooredSum);
+  const bumpNames = new Set([...withExact].sort((a, b) => b.remainder - a.remainder).slice(0, deficit).map((b) => b.name));
+  return withExact.map((b) => ({ name: b.name, ms: (b.floor + (bumpNames.has(b.name) ? 1 : 0)) * 60000 }));
+}
+
 function TimeSpentPanel({ incident, lookups, org, showToast }) {
   const [manualLogs, setManualLogs] = useState([]);
   const [minutes, setMinutes] = useState("");
@@ -4956,6 +5033,7 @@ function TimeSpentPanel({ incident, lookups, org, showToast }) {
   const breakdown = computeTimeInStatus(incident, lookups.statuses);
   const autoTotal = breakdown.reduce((sum, b) => sum + b.ms, 0);
   const manualTotal = manualLogs.reduce((sum, l) => sum + l.minutes * 60000, 0);
+  const displayBreakdown = apportionMinutes(breakdown, manualTotal);
 
   async function addManual() {
     const mins = parseInt(minutes, 10);
@@ -4977,7 +5055,7 @@ function TimeSpentPanel({ incident, lookups, org, showToast }) {
     <Panel title="Time spent" icon={Clock}>
       <p className="text-xs mb-3" style={{ color: COLORS.faint }}>Automatic, from status history — nobody has to remember to start a timer.</p>
       <div className="space-y-1.5 mb-3">
-        {breakdown.map((b) => (
+        {displayBreakdown.map((b) => (
           <div key={b.name} className="flex items-center justify-between text-sm">
             <span style={{ color: COLORS.muted }}>{b.name}</span>
             <span className="sd-mono" style={{ color: COLORS.text }}>{fmtDuration(b.ms)}</span>

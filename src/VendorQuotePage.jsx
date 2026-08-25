@@ -83,7 +83,7 @@ export default function VendorQuotePage({ token }) {
                 <div className="rounded-lg p-3 text-center" style={{ background: COLORS.teal + "18", border: `1px solid ${COLORS.teal}44` }}>
                   <Check size={20} color={COLORS.teal} className="mx-auto mb-1" />
                   <p className="text-sm" style={{ color: COLORS.teal }}>Quote submitted — thank you.</p>
-                  <p className="text-xs mt-1" style={{ color: COLORS.muted }}>You quoted R{price}{validUntil ? `, valid until ${validUntil}` : ""}.</p>
+                  <p className="text-xs mt-1" style={{ color: COLORS.muted }}>You quoted R{Number(price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{validUntil ? `, valid until ${validUntil}` : ""}.</p>
                   {/* The backend RPC (submit_quote_response) is a plain UPDATE
                       with no re-submission guard — this confirmation screen was
                       the only thing actually blocking a correction. Re-showing

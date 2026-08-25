@@ -56,6 +56,15 @@ export default function TrackPage({ token }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // The org's own vocabulary, not a hardcoded "issue" — status now carries
+  // a terminology column (effective_terminology(), same merge the staff
+  // app's getTerm() already does client-side). Fallback matches what
+  // every untemplated org already saw, so nothing changes for them.
+  const term = status?.terminology?.incident || "issue";
+  // Customer-facing display only — the real INC-prefixed identifier is a
+  // documented, stable API contract elsewhere and isn't touched here.
+  const displayNum = (status?.display_id || "").replace(/^[A-Za-z]+-/, "");
+
   async function sendReply() {
     if (!reply.trim()) return;
     setSending(true);
@@ -104,7 +113,7 @@ export default function TrackPage({ token }) {
       <div className="w-full max-w-sm p-6 rounded-xl" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}` }}>
         <div className="flex items-center gap-2 mb-4">
           <Anchor size={18} color={COLORS.amber} />
-          <span className="text-base font-semibold" style={{ color: COLORS.text }}>Track your issue</span>
+          <span className="text-base font-semibold" style={{ color: COLORS.text }}>Track your {term.toLowerCase()}</span>
         </div>
 
         {error && <p className="text-sm" style={{ color: COLORS.red }}>{error}</p>}
@@ -112,7 +121,7 @@ export default function TrackPage({ token }) {
         {status && (
           <>
             <div className="mb-4">
-              <div className="text-xs sd-mono mb-1" style={{ color: COLORS.faint }}>{status.display_id}</div>
+              <div className="text-xs sd-mono mb-1" style={{ color: COLORS.faint }}>{term} #{displayNum}</div>
               <div className="text-sm font-medium mb-1" style={{ color: COLORS.text }}>{status.title}</div>
               <div className="text-xs px-2 py-0.5 rounded-full inline-block" style={{ background: status.resolved_at ? COLORS.teal + "22" : COLORS.amber + "22", color: status.resolved_at ? COLORS.teal : COLORS.amber }}>
                 {status.resolved_at ? "Resolved" : status.status_name || "In progress"}
