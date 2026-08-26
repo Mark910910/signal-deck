@@ -2046,7 +2046,7 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
           )}
         </div>
         <div className="flex-1">
-          <AssigneePanel incident={incident} incidents={incidents} onChanged={onChanged} showToast={showToast} />
+          <AssigneePanel incident={incident} incidents={incidents} lookups={lookups} onChanged={onChanged} showToast={showToast} />
         </div>
       </div>
 
@@ -4167,19 +4167,25 @@ function CommentsPanel({ incident, org, onChanged }) {
 // groups. Computed client-side from data already loaded — no extra module,
 // no extra cost, just counting who on the team currently has the fewest
 // open incidents.
-function AssigneePanel({ incident, incidents, onChanged, showToast }) {
+function AssigneePanel({ incident, incidents, lookups, onChanged, showToast }) {
   const [members, setMembers] = useState([]);
   const assignment = incident.incident_assignments?.[0];
   const groupId = assignment?.resolver_group_id;
+  const groupName = groupId ? lookups.resolverGroups.find((g) => g.id === groupId)?.name : null;
 
+  // Found live: this panel used to `return null` whenever an incident had
+  // zero incident_assignments rows at all — every portal submission whose
+  // category has no configured default team (still most of them), plus
+  // anything created any other way that skipped picking a group. The
+  // whole "who's assigned" section just silently didn't render — no
+  // panel, no dropdown, no way to assign anyone. Now it always renders;
+  // when there's no known team it falls back to every org member instead
+  // of a team-scoped list.
   const load = useCallback(async () => {
-    if (!groupId) { setMembers([]); return; }
     const { data } = await supabase.rpc("list_org_members");
-    setMembers((data || []).filter((m) => m.resolver_group_id === groupId));
+    setMembers(groupId ? (data || []).filter((m) => m.resolver_group_id === groupId) : (data || []));
   }, [groupId]);
   useEffect(() => { load(); }, [load]);
-
-  if (!groupId) return null;
 
   // Open-incident count per member, from data already sitting in memory —
   // no extra query needed.
@@ -4190,26 +4196,45 @@ function AssigneePanel({ incident, incidents, onChanged, showToast }) {
     return { ...m, openCount };
   }).sort((a, b) => a.openCount - b.openCount);
 
-  const suggested = workload[0];
-  const currentlyAssigned = members.find((m) => m.user_id === assignment.assigned_user_id);
+  // The workload suggestion only means something within a known team —
+  // "least busy person in the company" isn't a useful nudge the way
+  // "least busy person on this team" is.
+  const suggested = groupId ? workload[0] : null;
+  const currentlyAssigned = members.find((m) => m.user_id === assignment?.assigned_user_id);
 
   async function assignTo(userId) {
-    await supabase.from("incident_assignments").update({ assigned_user_id: userId || null }).eq("id", assignment.id);
+    if (assignment) {
+      await supabase.from("incident_assignments").update({ assigned_user_id: userId || null }).eq("id", assignment.id);
+    } else if (userId) {
+      // No assignment row exists yet for this incident at all — create
+      // one so the pick has somewhere to live, same shape the manual
+      // "Log Incident" form and submit_via_portal's own routing use.
+      await supabase.from("incident_assignments").insert({
+        incident_id: incident.id, org_id: incident.org_id, resolver_group_id: null,
+        mode: "parallel", sequence_order: 0, sla_minutes: incident.sla_minutes, assigned_user_id: userId,
+      });
+    } else {
+      return;
+    }
     showToast(userId ? "Assigned" : "Unassigned");
     await onChanged();
   }
 
   return (
     <Panel title="Assigned to" icon={Users}>
+      {groupName && <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Routed to the <strong style={{ color: COLORS.text }}>{groupName}</strong> team</p>}
       {members.length === 0 ? (
-        <p className="text-xs" style={{ color: COLORS.faint }}>Nobody is on the assigned team yet — add people in Settings → Team assignment.</p>
+        <p className="text-xs" style={{ color: COLORS.faint }}>{groupId ? "Nobody is on this team yet" : "No one to assign yet"} — add people in Settings → Team assignment.</p>
       ) : (
         <>
-          <select value={assignment.assigned_user_id || ""} onChange={(e) => assignTo(e.target.value)} className="sd-in3 mb-2">
+          {!groupId && (
+            <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Not routed to a specific team — showing everyone.</p>
+          )}
+          <select value={assignment?.assigned_user_id || ""} onChange={(e) => assignTo(e.target.value)} className="sd-in3 mb-2">
             <option value="">Unassigned</option>
             {members.map((m) => <option key={m.user_id} value={m.user_id}>{m.email}</option>)}
           </select>
-          {suggested && suggested.user_id !== assignment.assigned_user_id && (
+          {suggested && suggested.user_id !== assignment?.assigned_user_id && (
             <button onClick={() => assignTo(suggested.user_id)} className="sd-btn-g text-[11px]">
               Suggest: {suggested.email} (currently {suggested.openCount} open)
             </button>
