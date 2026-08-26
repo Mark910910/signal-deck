@@ -1074,9 +1074,90 @@ function fieldStableJitter(id, range) {
   return (x - Math.floor(x)) * range - range / 2;
 }
 
+// Tilt is presentation only — every position/angle/color/size value
+// underneath is exactly the same 2D data model already computed above,
+// just viewed at an angle via a CSS 3D transform on the whole SVG plane.
+// Nothing about hit-testing, focus order, or aria-labels changes with
+// rotation, so the keyboard path fixed above stays fully intact.
+const FIELD_DEFAULT_TILT = { x: 24, y: 0 };
+const FIELD_IDLE_X_AMPLITUDE = 6;
+const FIELD_IDLE_Y_AMPLITUDE = 16;
+const FIELD_DRAG_CLAMP = 48;
+const FIELD_DRAG_THRESHOLD_PX = 4;
+
 function IncidentField({ incidents, lookups, org, onOpen }) {
   const [selected, setSelected] = useState(null);
+  const [dragging, setDragging] = useState(false);
   const slaTerm = getTerm(org, "sla", "deadline").toLowerCase();
+
+  const svgRef = useRef(null);
+  const rotationRef = useRef({ ...FIELD_DEFAULT_TILT });
+  const interactedRef = useRef(false);
+  const dragStateRef = useRef(null); // { startClientX, startClientY, startRot, isDrag }
+  const reducedMotionRef = useRef(typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+
+  function applyTilt() {
+    if (svgRef.current) svgRef.current.style.transform = `rotateX(${rotationRef.current.x}deg) rotateY(${rotationRef.current.y}deg)`;
+  }
+
+  // Idle-only ambient sway — a gentle, bounded oscillation (never an
+  // ever-incrementing spin) so it can never drift into an edge-on,
+  // unreadable angle on its own. Stops the moment someone actually drags
+  // it, permanently, rather than fighting a hand-chosen angle afterward.
+  useEffect(() => {
+    applyTilt();
+    if (reducedMotionRef.current) return;
+    let raf;
+    const start = performance.now();
+    function tick(now) {
+      if (!interactedRef.current) {
+        const t = (now - start) / 1000;
+        rotationRef.current = {
+          x: FIELD_DEFAULT_TILT.x + Math.sin(t * 0.2) * FIELD_IDLE_X_AMPLITUDE,
+          y: FIELD_DEFAULT_TILT.y + Math.sin(t * 0.15) * FIELD_IDLE_Y_AMPLITUDE,
+        };
+        applyTilt();
+      }
+      raf = requestAnimationFrame(tick);
+    }
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  function handlePointerDown(e) {
+    dragStateRef.current = { startClientX: e.clientX, startClientY: e.clientY, startRot: { ...rotationRef.current }, isDrag: false };
+    function onMove(ev) {
+      const st = dragStateRef.current;
+      if (!st) return;
+      const dx = ev.clientX - st.startClientX, dy = ev.clientY - st.startClientY;
+      if (!st.isDrag && Math.hypot(dx, dy) > FIELD_DRAG_THRESHOLD_PX) {
+        st.isDrag = true;
+        interactedRef.current = true;
+        setDragging(true);
+      }
+      if (st.isDrag) {
+        rotationRef.current = {
+          x: Math.max(-FIELD_DRAG_CLAMP, Math.min(FIELD_DRAG_CLAMP, st.startRot.x - dy * 0.4)),
+          y: Math.max(-FIELD_DRAG_CLAMP, Math.min(FIELD_DRAG_CLAMP, st.startRot.y + dx * 0.4)),
+        };
+        applyTilt();
+      }
+    }
+    function onUp() {
+      dragStateRef.current = null;
+      setDragging(false);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    }
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }
+
+  function resetTilt() {
+    interactedRef.current = false;
+    rotationRef.current = { ...FIELD_DEFAULT_TILT };
+    applyTilt();
+  }
 
   const sectors = useMemo(() => {
     const names = (lookups.resolverGroups || []).map((g) => g.name);
@@ -1152,9 +1233,17 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
         <span>· pulse = touched &lt;1h ago</span>
         <span>· dim = quiet 5+ days</span>
         <span>· ring = escalated</span>
+        <span className="ml-auto flex items-center gap-2">
+          <span style={{ color: COLORS.faint }}>Drag to rotate</span>
+          <button onClick={resetTilt} className="underline" style={{ color: COLORS.faint }}>Reset view</button>
+        </span>
       </p>
-      <svg viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, minWidth: 300, display: "block", margin: "0 auto" }}
-        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Use Tab to step through each incident.`}>
+      <div
+        style={{ perspective: "1000px", touchAction: "none" }}
+        onPointerDown={handlePointerDown}
+      >
+      <svg ref={svgRef} viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, minWidth: 300, display: "block", margin: "0 auto", cursor: dragging ? "grabbing" : "grab", willChange: "transform" }}
+        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Rendered at an angle — drag to rotate, or use Tab to step through each incident regardless of the current angle.`}>
         {["breached", "close", "soon", "later", "calm"].map((b) => (
           <circle key={b} cx={cx} cy={cy} r={FIELD_BANDS[b]} fill="none" stroke={b === "breached" ? COLORS.red : COLORS.border} strokeOpacity={b === "breached" ? 0.4 : 1} strokeWidth="1" />
         ))}
@@ -1211,6 +1300,7 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
           );
         })}
       </svg>
+      </div>
       {selected && (
         <div className="rounded-xl p-3.5 mt-3" style={{ maxWidth: 300, marginLeft: "auto", background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
           <div className="flex items-center justify-between mb-2">
