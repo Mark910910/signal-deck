@@ -634,7 +634,7 @@ function MainApp({ org, onOrgUpdated, initialWarRoomIncidentId }) {
           {tab === "preventatives" && <PreventativesTracker org={org} lookups={lookups} incidents={incidents} showToast={showToast} onOpenIncident={(id) => { setSelectedId(id); setTab("incidents"); }} onOpenProblem={(id) => { setOpenProblemId(id); setTab("problems"); }} />}
           {tab === "dashboards" && <CustomDashboards org={org} lookups={lookups} incidents={incidents} showToast={showToast} />}
           {tab === "privacy" && <PrivacyCenter org={org} onOrgUpdated={onOrgUpdated} incidents={incidents} showToast={showToast} />}
-          {tab === "settings" && <Settings org={org} lookups={lookups} onOrgUpdated={onOrgUpdated} onLookupsChanged={loadLookups} showToast={showToast} />}
+          {tab === "settings" && <Settings org={org} lookups={lookups} incidents={incidents} onOrgUpdated={onOrgUpdated} onLookupsChanged={loadLookups} showToast={showToast} />}
         </main>
       </div>
 
@@ -2359,8 +2359,31 @@ function PracticeModeBanner({ org }) {
   );
 }
 
+const CATEGORY_GAP_STOPWORDS = new Set(["the", "a", "an", "to", "of", "and", "or", "is", "in", "on", "for", "with", "this", "that", "it", "my", "was", "were", "be", "has", "have", "had", "not", "no", "again", "still", "i", "im", "its", "at", "as", "by"]);
+// Every "Other" pick is a silent dead end today — nobody sees why the
+// taxonomy failed. All of this is computed from `incidents`, already
+// loaded client-side for this tab; no new query. Gated behind a real
+// sample size so a brand-new org with zero signal sees nothing.
+function OtherCategoryGapHint({ incidents, categories }) {
+  const otherCat = categories.find((c) => c.name === "Other");
+  if (!otherCat) return null;
+  const matches = incidents.filter((i) => i.category?.id === otherCat.id && i.source === "portal");
+  if (matches.length < 5) return null;
+  const freq = {};
+  matches.forEach((i) => (i.title || "").toLowerCase().split(/\W+/).forEach((w) => {
+    if (w.length > 2 && !CATEGORY_GAP_STOPWORDS.has(w)) freq[w] = (freq[w] || 0) + 1;
+  }));
+  const top = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([w]) => w);
+  if (top.length === 0) return null;
+  return (
+    <p className="text-xs mt-2.5 p-2 rounded-lg" style={{ background: COLORS.amber + "14", border: `1px solid ${COLORS.amber}44`, color: COLORS.muted }}>
+      {matches.length} portal submissions have been filed as "Other." Common words: {top.join(", ")} — worth a dedicated category?
+    </p>
+  );
+}
+
 /* =================================== SETTINGS ================================ */
-function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
+function Settings({ org, lookups, incidents, onOrgUpdated, onLookupsChanged, showToast }) {
   const [orgName, setOrgName] = useState(org.name);
   const [ioName, setIoName] = useState(org.information_officer_name || "");
   const [ioEmail, setIoEmail] = useState(org.information_officer_email || "");
@@ -2384,6 +2407,11 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
   async function addGroup() { if (!newGroup.trim()) return; await supabase.from("resolver_groups").insert({ org_id: org.id, name: newGroup }); setNewGroup(""); onLookupsChanged(); }
   async function addCategory() { if (!newCategory.trim()) return; await supabase.from("categories").insert({ org_id: org.id, name: newCategory }); setNewCategory(""); onLookupsChanged(); }
+  // Routes portal + manual-creation tickets straight to a team instead of
+  // landing unassigned with nothing but a category name to go on — the
+  // "Log Incident" form has read this column for a while, but nothing
+  // ever let anyone set it, so it's sat null on every category.
+  async function updateCategoryGroup(id, groupId) { await supabase.from("categories").update({ default_resolver_group_id: groupId || null }).eq("id", id); onLookupsChanged(); }
   async function addRca() { if (!newRca.trim()) return; await supabase.from("rca_categories").insert({ org_id: org.id, name: newRca, sort_order: lookups.rcaCategories.length }); setNewRca(""); onLookupsChanged(); }
   async function removeItem(table, id) { await supabase.from(table).delete().eq("id", id); onLookupsChanged(); }
   async function updateSla(id, minutes) { await supabase.from("severities").update({ sla_minutes: minutes }).eq("id", id); onLookupsChanged(); }
@@ -2525,10 +2553,19 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
       <div id="settings-tickets">
       <CollapsibleSection title="Ticket setup" icon={ScanEye} defaultOpen={false}>
         <Panel title="Categories" icon={ScanEye}>
+          <p className="text-[11px] mb-2" style={{ color: COLORS.faint }}>Pick a default team per category and a matching ticket routes straight to them — from the portal or manual creation — instead of landing unassigned.</p>
           {lookups.categories.map((c) => (
-            <div key={c.id} className="flex items-center justify-between text-sm py-1">{c.name}<button onClick={() => removeItem("categories", c.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
+            <div key={c.id} className="flex items-center justify-between gap-2 text-sm py-1">
+              <span className="flex-1 truncate">{c.name}</span>
+              <select value={c.default_resolver_group_id || ""} onChange={(e) => updateCategoryGroup(c.id, e.target.value)} className="sd-in6" style={{ maxWidth: 150 }}>
+                <option value="">No default team</option>
+                {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              </select>
+              <button onClick={() => removeItem("categories", c.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+            </div>
           ))}
           <div className="flex gap-2 mt-2"><input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="sd-in5 flex-1" placeholder="New category" /><button onClick={addCategory} className="sd-btn-p6">Add</button></div>
+          <OtherCategoryGapHint incidents={incidents} categories={lookups.categories} />
         </Panel>
 
         <Panel title="Root cause taxonomy" icon={ScanEye}>
@@ -2568,7 +2605,7 @@ function Settings({ org, lookups, onOrgUpdated, onLookupsChanged, showToast }) {
 
         <AutomationTrustPanel org={org} showToast={showToast} />
 
-        <KBArticlesPanel org={org} showToast={showToast} />
+        <KBArticlesPanel org={org} incidents={incidents} showToast={showToast} />
       </CollapsibleSection>
       </div>
 
@@ -5445,20 +5482,32 @@ function VendorLinkPanel({ incident, org, onChanged, showToast }) {
   const [allVendors, setAllVendors] = useState([]);
   const [linked, setLinked] = useState([]);
   const [pickId, setPickId] = useState("");
+  const [accessByVendor, setAccessByVendor] = useState({});
+  const [copiedVendorId, setCopiedVendorId] = useState(null);
 
   const load = useCallback(async () => {
-    const [all, lk] = await Promise.all([
+    const [all, lk, acc] = await Promise.all([
       supabase.from("vendors").select("id, name").eq("status", "active").order("name"),
       supabase.from("incident_vendors").select("vendor_id, vendors(name, display_id)").eq("incident_id", incident.id),
+      supabase.from("incident_vendor_access").select("vendor_id, token").eq("incident_id", incident.id),
     ]);
     setAllVendors(all.data || []);
     setLinked(lk.data || []);
+    setAccessByVendor(Object.fromEntries((acc.data || []).map((a) => [a.vendor_id, a.token])));
   }, [incident.id]);
   useEffect(() => { load(); }, [load]);
 
   async function link() {
     if (!pickId) return;
     await supabase.from("incident_vendors").insert({ incident_id: incident.id, vendor_id: pickId, org_id: org.id });
+    // The notify_vendor_on_link trigger only creates a track link when it
+    // can also email the vendor — staff should always be able to grab a
+    // link to hand off some other way, even for a vendor with no email
+    // on file, so this guarantees one exists independent of that.
+    await supabase.from("incident_vendor_access").upsert(
+      { incident_id: incident.id, vendor_id: pickId, org_id: org.id },
+      { onConflict: "incident_id,vendor_id", ignoreDuplicates: true }
+    );
     setPickId("");
     showToast("Linked");
     await load(); await onChanged();
@@ -5466,6 +5515,14 @@ function VendorLinkPanel({ incident, org, onChanged, showToast }) {
   async function unlink(vendorId) {
     await supabase.from("incident_vendors").delete().eq("incident_id", incident.id).eq("vendor_id", vendorId);
     await load(); await onChanged();
+  }
+  function copyVendorTrackLink(vendorId) {
+    const token = accessByVendor[vendorId];
+    if (!token) return;
+    navigator.clipboard?.writeText(`${window.location.origin}/vendor/${token}`);
+    setCopiedVendorId(vendorId);
+    showToast("Vendor link copied");
+    setTimeout(() => setCopiedVendorId((id) => (id === vendorId ? null : id)), 1800);
   }
 
   if (allVendors.length === 0 && linked.length === 0) return null;
@@ -5475,7 +5532,14 @@ function VendorLinkPanel({ incident, org, onChanged, showToast }) {
       {linked.map((l) => (
         <div key={l.vendor_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
           <span style={{ color: COLORS.text }}>{l.vendors?.name}</span>
-          <button onClick={() => unlink(l.vendor_id)}><X size={13} color={COLORS.faint} /></button>
+          <div className="flex items-center gap-2.5">
+            {accessByVendor[l.vendor_id] && (
+              <button onClick={() => copyVendorTrackLink(l.vendor_id)} className="text-xs underline" style={{ color: COLORS.teal }}>
+                {copiedVendorId === l.vendor_id ? "Copied" : "Copy link"}
+              </button>
+            )}
+            <button onClick={() => unlink(l.vendor_id)}><X size={13} color={COLORS.faint} /></button>
+          </div>
         </div>
       ))}
       <div className="flex gap-2 mt-2">
@@ -6400,7 +6464,7 @@ function RCAAnalysisPanel({ incident, problemId, org, lookups, onCategorySuggest
 // content quality, not technology, as "the most common reason self-
 // service portals fail." Staff authors these; the portal surfaces them
 // automatically at the moment a customer is typing a ticket.
-function KBArticlesPanel({ org, showToast }) {
+function KBArticlesPanel({ org, incidents, showToast }) {
   const [articles, setArticles] = useState([]);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -6411,6 +6475,20 @@ function KBArticlesPanel({ org, showToast }) {
     setArticles(data || []);
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // deflection_context already carries forward exactly the signal this
+  // needs — it's only ever set when the portal showed articles and NONE
+  // were marked helpful (submit_via_portal filters out any marked "up"
+  // before storing it), i.e. a real content gap, not a success. No new
+  // tracking, just surfacing data already captured for a different
+  // purpose (staff context on the incident). Gated behind a real sample
+  // size so a brand-new org sees nothing.
+  const gapMatches = (incidents || []).filter((i) => i.source === "portal" && Array.isArray(i.deflection_context) && i.deflection_context.length > 0);
+  const gapFreq = {};
+  gapMatches.forEach((i) => (i.title || "").toLowerCase().split(/\W+/).forEach((w) => {
+    if (w.length > 2 && !CATEGORY_GAP_STOPWORDS.has(w)) gapFreq[w] = (gapFreq[w] || 0) + 1;
+  }));
+  const gapTopWords = Object.entries(gapFreq).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([w]) => w);
 
   async function save() {
     if (!title.trim() || !body.trim()) { showToast("Give it a title and some content"); return; }
@@ -6437,6 +6515,11 @@ function KBArticlesPanel({ org, showToast }) {
       <p className="text-sm mb-3" style={{ color: COLORS.muted }}>
         Shown automatically to customers as they type on the portal, before they submit a ticket — not a separate help page nobody visits. Write what a customer would actually search for as the title.
       </p>
+      {gapMatches.length >= 5 && gapTopWords.length > 0 && (
+        <p className="text-xs mb-3 p-2 rounded-lg" style={{ background: COLORS.amber + "14", border: `1px solid ${COLORS.amber}44`, color: COLORS.muted }}>
+          {gapMatches.length} portal submissions saw self-service suggestions but filed a ticket anyway. Common words: {gapTopWords.join(", ")} — might be worth an article.
+        </p>
+      )}
       <div className="space-y-2 mb-4">
         {articles.map((a) => (
           <div key={a.id} className="p-2.5 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
