@@ -866,6 +866,10 @@ function CollapsibleSection({ title, icon: Icon, defaultOpen = false, forceOpen 
 
 /* ================================== DECK =================================== */
 function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncidents, onNavigateSettings }) {
+  // Toggle, not a replacement — the list stays the default and the only
+  // thing that changes is presentation of the same `open` array; nothing
+  // about filtering/sorting/data loading differs between the two views.
+  const [view, setView] = useState("list");
   // Business Impact SLA: surface the highest revenue-risk open incidents
   // first, not just whatever was logged most recently — and, same as
   // IncidentList's own sort, breach status wins the tiebreak over
@@ -950,39 +954,59 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
         </p>
       )}
       <Panel title={`Open ${getTerm(org, "incidents", "incidents").toLowerCase()}`} icon={Radio}>
-        <p className="text-[10px] -mt-1 mb-2" style={{ color: COLORS.faint }}>Sorted by urgency — breached first, then severity — not by when it was logged.</p>
-        <div className="divide-y" style={{ borderColor: COLORS.border }}>
-          {open.slice(0, 8).map((inc) => (
-            <button key={inc.id} onClick={() => onOpen(inc.id)} className="w-full flex items-center justify-between gap-3 py-2.5 text-left">
-              <div className="min-w-0">
-                {/* Same two-row split as IncidentList: fixed identity+state
-                    line, then an exceptions line that only exists when
-                    there's actually an exception to show. */}
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
-                  <SeverityPill name={inc.severity?.name} />
-                  <StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
-                  <AcknowledgedBadge incident={inc} />
-                  <AssigneeIndicator incident={inc} members={members} />
-                </div>
-                {(inc.escalated_at || inc.approval_status === "pending" || inc.is_practice) && (
-                  <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
-                    {inc.is_practice && (
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.faint, background: COLORS.faint + "22" }}>PRACTICE</span>
-                    )}
-                    <EscalatedBadge incident={inc} />
-                    {inc.approval_status === "pending" && (
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
-                    )}
-                  </div>
-                )}
-                <div className="text-sm truncate">{inc.title}</div>
-              </div>
-              <SLABadge incident={inc} org={org} />
+        <div className="flex items-center justify-between gap-2 -mt-1 mb-2 flex-wrap">
+          <p className="text-[10px]" style={{ color: COLORS.faint }}>
+            {view === "list"
+              ? "Sorted by urgency — breached first, then severity — not by when it was logged."
+              : "Position = time to breach, size = business weight, color = severity — read the shape, not a row."}
+          </p>
+          <div className="flex gap-1 shrink-0" role="group" aria-label="Incident view">
+            <button onClick={() => setView("list")} className="text-[10px] font-medium px-2.5 py-1 rounded-full"
+              style={{ background: view === "list" ? COLORS.amber + "22" : "transparent", color: view === "list" ? COLORS.amber : COLORS.muted, border: `1px solid ${view === "list" ? COLORS.amber + "55" : COLORS.border}` }}>
+              List
             </button>
-          ))}
-          {open.length === 0 && <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>}
+            <button onClick={() => setView("field")} className="text-[10px] font-medium px-2.5 py-1 rounded-full"
+              style={{ background: view === "field" ? COLORS.amber + "22" : "transparent", color: view === "field" ? COLORS.amber : COLORS.muted, border: `1px solid ${view === "field" ? COLORS.amber + "55" : COLORS.border}` }}>
+              Field
+            </button>
+          </div>
         </div>
+        {view === "list" ? (
+          <div className="divide-y" style={{ borderColor: COLORS.border }}>
+            {open.slice(0, 8).map((inc) => (
+              <button key={inc.id} onClick={() => onOpen(inc.id)} className="w-full flex items-center justify-between gap-3 py-2.5 text-left">
+                <div className="min-w-0">
+                  {/* Same two-row split as IncidentList: fixed identity+state
+                      line, then an exceptions line that only exists when
+                      there's actually an exception to show. */}
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{inc.display_id}</span>
+                    <SeverityPill name={inc.severity?.name} />
+                    <StatusPill name={inc.status?.name} statusId={inc.status?.id} statuses={lookups.statuses} />
+                    <AcknowledgedBadge incident={inc} />
+                    <AssigneeIndicator incident={inc} members={members} />
+                  </div>
+                  {(inc.escalated_at || inc.approval_status === "pending" || inc.is_practice) && (
+                    <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+                      {inc.is_practice && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.faint, background: COLORS.faint + "22" }}>PRACTICE</span>
+                      )}
+                      <EscalatedBadge incident={inc} />
+                      {inc.approval_status === "pending" && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ color: COLORS.violet, background: COLORS.violet + "22" }}>AWAITING APPROVAL</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="text-sm truncate">{inc.title}</div>
+                </div>
+                <SLABadge incident={inc} org={org} />
+              </button>
+            ))}
+            {open.length === 0 && <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>}
+          </div>
+        ) : (
+          <IncidentField incidents={open} lookups={lookups} onOpen={onOpen} />
+        )}
       </Panel>
       {/* Analytics, not action — moved below the actionable list. This used
           to render first, meaning every visit meant scrolling past a chart
@@ -1004,6 +1028,159 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
     </div>
   );
 }
+
+/* ============================ INCIDENT FIELD (Deck toggle) ==================== */
+// Candidate 2 from the "no list view" design exercise, wired to real data —
+// same `open` array Deck already computed, nothing new fetched. Position
+// (distance from center) is time-to-breach; angle is resolver group; size
+// is business_weight; color is severity; a pulse means someone touched it
+// under an hour ago; dimming means STALE_THRESHOLD_MS has actually
+// elapsed; a red ring means escalated_at fired. "Unrouted" is a real
+// sector, not a placeholder — it's exactly what a null resolver_group_id
+// looks like, the same gap AssigneePanel's fallback was built for.
+const FIELD_BANDS = { breached: 34, close: 95, soon: 150, later: 205, calm: 265 };
+const FIELD_BAND_LABEL = { breached: "breached", close: "30m", soon: "4h", later: "24h", calm: "calm" };
+function fieldBandFor(mins) {
+  if (mins <= 0) return "breached";
+  if (mins < 30) return "close";
+  if (mins < 240) return "soon";
+  if (mins < 1440) return "later";
+  return "calm";
+}
+function fieldStateFor(mins) {
+  if (mins < 60) return "active";
+  if (mins > STALE_THRESHOLD_MS / 60000) return "stale";
+  return "normal";
+}
+function fieldFmtMins(mins) {
+  const abs = Math.abs(mins);
+  if (abs < 60) return `${Math.round(abs)}m`;
+  if (abs < 1440) return `${(abs / 60).toFixed(1)}h`;
+  return `${(abs / 1440).toFixed(1)}d`;
+}
+function fieldSeededJitter(seed, range) {
+  const x = Math.sin(seed * 999) * 10000;
+  return (x - Math.floor(x)) * range - range / 2;
+}
+
+function IncidentField({ incidents, lookups, onOpen }) {
+  const [selected, setSelected] = useState(null);
+
+  const sectors = useMemo(() => {
+    const names = (lookups.resolverGroups || []).map((g) => g.name);
+    return [...names, "Unrouted"];
+  }, [lookups.resolverGroups]);
+
+  const points = useMemo(() => {
+    const now = Date.now();
+    return incidents.map((inc) => {
+      const team = inc.incident_assignments?.[0]?.resolver_groups?.name || "Unrouted";
+      const sevName = inc.severity?.name || "Medium";
+      const weight = inc.severity?.business_weight || 1;
+      const minsToBreach = (new Date(inc.created_at).getTime() + (inc.sla_minutes || 0) * 60000 - now) / 60000;
+      const minsSinceActivity = (now - lastActivityAt(inc)) / 60000;
+      return {
+        inc, team, sevName, weight, minsToBreach, minsSinceActivity,
+        band: fieldBandFor(minsToBreach),
+        state: fieldStateFor(minsSinceActivity),
+        escalated: !!inc.escalated_at,
+      };
+    });
+  }, [incidents]);
+
+  const cx = 300, cy = 300;
+  const sectorSpan = 360 / Math.max(sectors.length, 1);
+  const gapDeg = 2.5;
+  function polar(angleDeg, r) {
+    const a = (angleDeg - 90) * Math.PI / 180;
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+  }
+
+  const nodes = useMemo(() => {
+    return sectors.flatMap((name, i) => {
+      const boundary = -90 + i * sectorSpan;
+      const items = points.filter((p) => p.team === name);
+      return items.map((p, j) => {
+        const angle = boundary + gapDeg + (sectorSpan - gapDeg * 2) * ((j + 1) / (items.length + 1)) + fieldSeededJitter(i * 11 + j * 5, sectorSpan * 0.18);
+        const r = FIELD_BANDS[p.band] + fieldSeededJitter(i * 13 + j * 7, 14);
+        const [x, y] = polar(angle, Math.max(10, r));
+        return { ...p, x, y, radius: 5 + p.weight * 2.1 };
+      });
+    });
+  }, [points, sectors]);
+
+  if (incidents.length === 0) {
+    return <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>;
+  }
+
+  const sevHex = { Critical: COLORS.red, High: COLORS.amber, Medium: COLORS.yellow, Low: COLORS.blue };
+
+  function whyText(p) {
+    const breachPart = p.minsToBreach <= 0 ? `already ${fieldFmtMins(p.minsToBreach)} past its deadline` : `${fieldFmtMins(p.minsToBreach)} from its deadline`;
+    const activityPart = p.state === "active" ? "touched under an hour ago" : p.state === "stale" ? `quiet for over ${fieldFmtMins(p.minsSinceActivity)}` : `quiet for about ${fieldFmtMins(p.minsSinceActivity)}`;
+    return `${breachPart[0].toUpperCase() + breachPart.slice(1)}, ${activityPart}.`;
+  }
+
+  return (
+    <div className="relative">
+      <svg viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, display: "block", margin: "0 auto" }}>
+        {["close", "soon", "later", "calm"].map((b) => (
+          <circle key={b} cx={cx} cy={cy} r={FIELD_BANDS[b]} fill="none" stroke={COLORS.border} strokeWidth="1" />
+        ))}
+        <circle cx={cx} cy={cy} r="2.5" fill={COLORS.faint} />
+        {["close", "soon", "later", "calm"].map((b) => {
+          const [lx, ly] = polar(-90 + sectorSpan - gapDeg, FIELD_BANDS[b]);
+          return <text key={b} x={lx + 4} y={ly} fontSize="9.5" fill={COLORS.faint} className="sd-mono">{FIELD_BAND_LABEL[b]}</text>;
+        })}
+        {sectors.map((name, i) => {
+          const boundary = -90 + i * sectorSpan;
+          const [x1, y1] = polar(boundary, 20);
+          const [x2, y2] = polar(boundary, 300);
+          const [lx, ly] = polar(boundary + sectorSpan / 2, 300 + 20);
+          const count = points.filter((p) => p.team === name).length;
+          return (
+            <g key={name}>
+              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={COLORS.border} strokeWidth="1" />
+              <text x={lx} y={ly} textAnchor="middle" dominantBaseline="middle" fontSize="11" fontWeight="600" fill={count === 0 ? COLORS.faint : COLORS.muted}>
+                {count === 0 ? `${name} · calm` : name}
+              </text>
+            </g>
+          );
+        })}
+        {nodes.map((p) => (
+          <g key={p.inc.id}>
+            {p.escalated && <circle cx={p.x} cy={p.y} r={p.radius + 5} fill="none" stroke={COLORS.red} strokeWidth="1.4" opacity="0.75" />}
+            <circle
+              cx={p.x} cy={p.y} r={p.radius}
+              fill={sevHex[p.sevName] || COLORS.muted}
+              opacity={p.state === "stale" ? 0.4 : 1}
+              className={p.state === "active" ? "sd-pulse" : ""}
+              style={{ cursor: "pointer", stroke: selected?.inc.id === p.inc.id ? COLORS.text : "none", strokeWidth: 1.5 }}
+              onClick={() => setSelected(p)}
+            />
+          </g>
+        ))}
+      </svg>
+      {selected && (
+        <div className="absolute top-0 right-0 rounded-xl p-3.5" style={{ width: 230, background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{selected.inc.display_id}</span>
+            <button onClick={() => setSelected(null)} aria-label="Close" style={{ color: COLORS.faint, lineHeight: 1, fontSize: 15 }}>&times;</button>
+          </div>
+          <p className="text-sm font-medium mb-2" style={{ color: COLORS.text }}>{selected.inc.title}</p>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            <SeverityPill name={selected.sevName} />
+            <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: COLORS.border, color: COLORS.muted }}>{selected.team}</span>
+            {selected.escalated && <EscalatedBadge incident={selected.inc} />}
+          </div>
+          <p className="text-[11px] mb-3" style={{ color: COLORS.muted }}>{whyText(selected)}</p>
+          <button onClick={() => onOpen(selected.inc.id)} className="w-full py-1.5 rounded-lg text-xs font-semibold" style={{ background: COLORS.amber, color: "#1A1200" }}>Open incident</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, color, onClick }) {
   const Wrapper = onClick ? "button" : "div";
   return (
