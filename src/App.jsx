@@ -1939,6 +1939,14 @@ function IncidentDetail({ incident, incidents, lookups, org, onBack, onChanged, 
             incident the last thing on the page instead of the first. */}
         <div className="flex items-center gap-2 flex-wrap mb-2">
           <span className="sd-mono text-xs" style={{ color: COLORS.faint }}>{incident.display_id}</span>
+          {/* The one thing every ticket always has, even with no team
+              routed and nobody assigned — shown on every list row
+              already, but never on the ticket's own page until now, so
+              "what department is this even about" had no answer at all
+              once routing/assignment came up empty. */}
+          {incident.category?.name && (
+            <span className="text-xs px-2 py-0.5 rounded-full" style={{ color: COLORS.muted, background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>{incident.category.name}</span>
+          )}
           <SeverityPill name={incident.severity?.name} /><StatusPill name={incident.status?.name} statusId={incident.status?.id} statuses={lookups.statuses} />
           <AcknowledgedBadge incident={incident} />
           <AssigneeIndicator incident={incident} members={members} />
@@ -4228,7 +4236,7 @@ function AssigneePanel({ incident, incidents, lookups, onChanged, showToast }) {
       ) : (
         <>
           {!groupId && (
-            <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Not routed to a specific team — showing everyone.</p>
+            <p className="text-[11px] mb-1.5" style={{ color: COLORS.faint }}>Not routed to a specific team — showing everyone. Set a default team for this category in Settings → Ticket setup → Categories so future tickets like it route automatically.</p>
           )}
           <select value={assignment?.assigned_user_id || ""} onChange={(e) => assignTo(e.target.value)} className="sd-in3 mb-2">
             <option value="">Unassigned</option>
