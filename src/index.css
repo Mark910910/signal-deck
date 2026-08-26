@@ -10,6 +10,13 @@ body { margin: 0; background: #0A1120; }
 .sd-display { font-family: 'Space Grotesk', sans-serif; }
 @keyframes pulseSignal { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 .sd-pulse { animation: pulseSignal 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .sd-pulse { animation: none; } }
+/* Field view's incident nodes are an invisible, larger circle carrying
+   the real click/keyboard target (so a small-severity dot still has a
+   ≥24px hit area) — outline:none on it is intentional (a round outline
+   looks wrong offset from a circle), replaced with a visible stroke ring
+   only on real keyboard focus, never on mouse click. */
+.field-node:focus-visible { stroke: #E8ECF3; stroke-width: 2px; }
 input, textarea, select { font-family: 'Inter', sans-serif; }
 
 /* Shared form/button styles, moved here from scattered per-component

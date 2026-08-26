@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import {
   AlertTriangle, Clock, CheckCircle2, Radio, Search, Settings as SettingsIcon,
   Plus, ArrowLeft, Shield, ShieldCheck, Sparkles, Send, Bot, Zap, Users,
-  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server, Truck, ChevronUp, ChevronDown, BookOpen
+  Trash2, RefreshCw, Copy, Check, Download, UserX, ScanEye, LogOut, Anchor, Link2, Activity, Key, Webhook, TrendingUp, BarChart3, GripVertical, Bell, MessageSquare, Lock, Filter, X, Layers, Server, Truck, ChevronUp, ChevronDown, BookOpen, List, Radar
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
 import { supabase } from "./supabaseClient.js";
@@ -958,16 +958,16 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
           <p className="text-[10px]" style={{ color: COLORS.faint }}>
             {view === "list"
               ? "Sorted by urgency — breached first, then severity — not by when it was logged."
-              : "Position = time to breach, size = business weight, color = severity — read the shape, not a row."}
+              : `Position = time to ${getTerm(org, "sla", "deadline").toLowerCase()}, size = business weight, color = severity — read the shape, not a row.`}
           </p>
           <div className="flex gap-1 shrink-0" role="group" aria-label="Incident view">
-            <button onClick={() => setView("list")} className="text-[10px] font-medium px-2.5 py-1 rounded-full"
+            <button onClick={() => setView("list")} className="flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg"
               style={{ background: view === "list" ? COLORS.amber + "22" : "transparent", color: view === "list" ? COLORS.amber : COLORS.muted, border: `1px solid ${view === "list" ? COLORS.amber + "55" : COLORS.border}` }}>
-              List
+              <List size={11} /> List
             </button>
-            <button onClick={() => setView("field")} className="text-[10px] font-medium px-2.5 py-1 rounded-full"
+            <button onClick={() => setView("field")} className="flex items-center gap-1 text-[10px] font-medium px-2.5 py-1 rounded-lg"
               style={{ background: view === "field" ? COLORS.amber + "22" : "transparent", color: view === "field" ? COLORS.amber : COLORS.muted, border: `1px solid ${view === "field" ? COLORS.amber + "55" : COLORS.border}` }}>
-              Field
+              <Radar size={11} /> Field
             </button>
           </div>
         </div>
@@ -1005,7 +1005,7 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
             {open.length === 0 && <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>}
           </div>
         ) : (
-          <IncidentField incidents={open} lookups={lookups} onOpen={onOpen} />
+          <IncidentField incidents={open} lookups={lookups} org={org} onOpen={onOpen} />
         )}
       </Panel>
       {/* Analytics, not action — moved below the actionable list. This used
@@ -1035,9 +1035,11 @@ function Deck({ incidents, lookups, org, tick, members, onOpen, onNavigateIncide
 // (distance from center) is time-to-breach; angle is resolver group; size
 // is business_weight; color is severity; a pulse means someone touched it
 // under an hour ago; dimming means STALE_THRESHOLD_MS has actually
-// elapsed; a red ring means escalated_at fired. "Unrouted" is a real
-// sector, not a placeholder — it's exactly what a null resolver_group_id
-// looks like, the same gap AssigneePanel's fallback was built for.
+// elapsed; a ring means escalated_at fired. "Unassigned" (not "Unrouted" —
+// matches every other surface's name for this exact state, per
+// ui-designer/usability-expert review) is a real sector, not a
+// placeholder — it's what a null resolver_group_id looks like, the same
+// gap AssigneePanel's fallback was built for.
 const FIELD_BANDS = { breached: 34, close: 95, soon: 150, later: 205, calm: 265 };
 const FIELD_BAND_LABEL = { breached: "breached", close: "30m", soon: "4h", later: "24h", calm: "calm" };
 function fieldBandFor(mins) {
@@ -1058,23 +1060,33 @@ function fieldFmtMins(mins) {
   if (abs < 1440) return `${(abs / 60).toFixed(1)}h`;
   return `${(abs / 1440).toFixed(1)}d`;
 }
-function fieldSeededJitter(seed, range) {
-  const x = Math.sin(seed * 999) * 10000;
+// Seeded from the incident's own id, not its position within whatever the
+// current sort happens to produce — found live: seeding from array index
+// meant an unrelated incident resolving or breaching elsewhere could
+// silently shift every other dot in its own sector, undermining the one
+// thing this view promises ("read the shape") since the shape didn't hold
+// still. Range is clamped well inside gapDeg so jitter can no longer push
+// a node across its own sector's boundary line into a neighbor's wedge.
+function fieldStableJitter(id, range) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  const x = Math.sin(h) * 10000;
   return (x - Math.floor(x)) * range - range / 2;
 }
 
-function IncidentField({ incidents, lookups, onOpen }) {
+function IncidentField({ incidents, lookups, org, onOpen }) {
   const [selected, setSelected] = useState(null);
+  const slaTerm = getTerm(org, "sla", "deadline").toLowerCase();
 
   const sectors = useMemo(() => {
     const names = (lookups.resolverGroups || []).map((g) => g.name);
-    return [...names, "Unrouted"];
+    return [...names, "Unassigned"];
   }, [lookups.resolverGroups]);
 
   const points = useMemo(() => {
     const now = Date.now();
     return incidents.map((inc) => {
-      const team = inc.incident_assignments?.[0]?.resolver_groups?.name || "Unrouted";
+      const team = inc.incident_assignments?.[0]?.resolver_groups?.name || "Unassigned";
       const sevName = inc.severity?.name || "Medium";
       const weight = inc.severity?.business_weight || 1;
       const minsToBreach = (new Date(inc.created_at).getTime() + (inc.sla_minutes || 0) * 60000 - now) / 60000;
@@ -1091,44 +1103,63 @@ function IncidentField({ incidents, lookups, onOpen }) {
   const cx = 300, cy = 300;
   const sectorSpan = 360 / Math.max(sectors.length, 1);
   const gapDeg = 2.5;
+  const jitterRange = Math.min(sectorSpan * 0.18, gapDeg * 1.4);
   function polar(angleDeg, r) {
     const a = (angleDeg - 90) * Math.PI / 180;
     return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
   }
 
   const nodes = useMemo(() => {
-    return sectors.flatMap((name, i) => {
+    const placed = sectors.flatMap((name, i) => {
       const boundary = -90 + i * sectorSpan;
       const items = points.filter((p) => p.team === name);
       return items.map((p, j) => {
-        const angle = boundary + gapDeg + (sectorSpan - gapDeg * 2) * ((j + 1) / (items.length + 1)) + fieldSeededJitter(i * 11 + j * 5, sectorSpan * 0.18);
-        const r = FIELD_BANDS[p.band] + fieldSeededJitter(i * 13 + j * 7, 14);
+        const angle = boundary + gapDeg + (sectorSpan - gapDeg * 2) * ((j + 1) / (items.length + 1)) + fieldStableJitter(p.inc.id, jitterRange);
+        const r = Math.min(FIELD_BANDS[p.band] + fieldStableJitter(p.inc.id + "r", 14), 285);
         const [x, y] = polar(angle, Math.max(10, r));
         return { ...p, x, y, radius: 5 + p.weight * 2.1 };
       });
     });
-  }, [points, sectors]);
+    // Paint order only — highest-priority nodes drawn last so a big, calm
+    // dot can never visually or hit-test cover a small escalated one that
+    // happens to share roughly the same position.
+    return placed.sort((a, b) => {
+      const score = (n) => (n.escalated ? 4 : 0) + (n.band === "breached" ? 2 : 0) + (n.sevName === "Critical" ? 1 : 0);
+      return score(a) - score(b);
+    });
+  }, [points, sectors, jitterRange]);
 
   if (incidents.length === 0) {
     return <p className="py-6 text-center text-sm" style={{ color: COLORS.muted }}>All clear on deck.</p>;
   }
 
-  const sevHex = { Critical: COLORS.red, High: COLORS.amber, Medium: COLORS.yellow, Low: COLORS.blue };
-
   function whyText(p) {
-    const breachPart = p.minsToBreach <= 0 ? `already ${fieldFmtMins(p.minsToBreach)} past its deadline` : `${fieldFmtMins(p.minsToBreach)} from its deadline`;
+    const breachPart = p.minsToBreach <= 0 ? `already ${fieldFmtMins(p.minsToBreach)} past its ${slaTerm}` : `${fieldFmtMins(p.minsToBreach)} from its ${slaTerm}`;
     const activityPart = p.state === "active" ? "touched under an hour ago" : p.state === "stale" ? `quiet for over ${fieldFmtMins(p.minsSinceActivity)}` : `quiet for about ${fieldFmtMins(p.minsSinceActivity)}`;
     return `${breachPart[0].toUpperCase() + breachPart.slice(1)}, ${activityPart}.`;
+  }
+  function nodeLabel(p) {
+    return `${p.inc.display_id}, ${p.inc.title}, ${p.team}, ${p.sevName} severity. ${whyText(p)}${p.escalated ? " Escalated." : ""}`;
   }
 
   return (
     <div className="relative">
-      <svg viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, display: "block", margin: "0 auto" }}>
-        {["close", "soon", "later", "calm"].map((b) => (
-          <circle key={b} cx={cx} cy={cy} r={FIELD_BANDS[b]} fill="none" stroke={COLORS.border} strokeWidth="1" />
+      <p className="text-[10.5px] mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-1" style={{ color: COLORS.muted }}>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: COLORS.red }} />Critical</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: COLORS.amber }} />High</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: COLORS.yellow }} />Medium</span>
+        <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full" style={{ background: COLORS.blue }} />Low</span>
+        <span>· pulse = touched &lt;1h ago</span>
+        <span>· dim = quiet 5+ days</span>
+        <span>· ring = escalated</span>
+      </p>
+      <svg viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, minWidth: 300, display: "block", margin: "0 auto" }}
+        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Use Tab to step through each incident.`}>
+        {["breached", "close", "soon", "later", "calm"].map((b) => (
+          <circle key={b} cx={cx} cy={cy} r={FIELD_BANDS[b]} fill="none" stroke={b === "breached" ? COLORS.red : COLORS.border} strokeOpacity={b === "breached" ? 0.4 : 1} strokeWidth="1" />
         ))}
         <circle cx={cx} cy={cy} r="2.5" fill={COLORS.faint} />
-        {["close", "soon", "later", "calm"].map((b) => {
+        {["breached", "close", "soon", "later", "calm"].map((b) => {
           const [lx, ly] = polar(-90 + sectorSpan - gapDeg, FIELD_BANDS[b]);
           return <text key={b} x={lx + 4} y={ly} fontSize="9.5" fill={COLORS.faint} className="sd-mono">{FIELD_BAND_LABEL[b]}</text>;
         })}
@@ -1136,33 +1167,52 @@ function IncidentField({ incidents, lookups, onOpen }) {
           const boundary = -90 + i * sectorSpan;
           const [x1, y1] = polar(boundary, 20);
           const [x2, y2] = polar(boundary, 300);
-          const [lx, ly] = polar(boundary + sectorSpan / 2, 300 + 20);
+          const [lx, ly] = polar(boundary + sectorSpan / 2, Math.min(300 + 20, 288));
           const count = points.filter((p) => p.team === name).length;
           return (
             <g key={name}>
               <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={COLORS.border} strokeWidth="1" />
               <text x={lx} y={ly} textAnchor="middle" dominantBaseline="middle" fontSize="11" fontWeight="600" fill={count === 0 ? COLORS.faint : COLORS.muted}>
-                {count === 0 ? `${name} · calm` : name}
+                {count === 0 ? `${name} · quiet` : name}
               </text>
             </g>
           );
         })}
-        {nodes.map((p) => (
-          <g key={p.inc.id}>
-            {p.escalated && <circle cx={p.x} cy={p.y} r={p.radius + 5} fill="none" stroke={COLORS.red} strokeWidth="1.4" opacity="0.75" />}
-            <circle
-              cx={p.x} cy={p.y} r={p.radius}
-              fill={sevHex[p.sevName] || COLORS.muted}
-              opacity={p.state === "stale" ? 0.4 : 1}
-              className={p.state === "active" ? "sd-pulse" : ""}
-              style={{ cursor: "pointer", stroke: selected?.inc.id === p.inc.id ? COLORS.text : "none", strokeWidth: 1.5 }}
-              onClick={() => setSelected(p)}
-            />
-          </g>
-        ))}
+        {nodes.map((p) => {
+          const isSelected = selected?.inc.id === p.inc.id;
+          // Ring reuses Alarm Red everywhere except on a Critical (also-red)
+          // fill, where a red-on-red ring visually disappears — Deck
+          // White reads as a distinct "flagged" marker in that one case
+          // without inventing a new claimed meaning.
+          const ringColor = p.sevName === "Critical" ? COLORS.text : COLORS.red;
+          return (
+            <g key={p.inc.id}>
+              {p.escalated && <circle cx={p.x} cy={p.y} r={p.radius + 5} fill="none" stroke={ringColor} strokeWidth="1.4" opacity="0.8" />}
+              {/* Visible dot — purely decorative; the invisible circle below
+                  carries focus/click/keyboard so a Low-severity, weight-1
+                  incident (≈10px on screen) still has a real ≥24px target. */}
+              <circle
+                cx={p.x} cy={p.y} r={p.radius}
+                fill={SEV_COLOR[p.sevName] || COLORS.muted}
+                opacity={p.state === "stale" ? 0.4 : 1}
+                className={p.state === "active" ? "sd-pulse" : ""}
+                style={{ pointerEvents: "none", stroke: isSelected ? COLORS.text : "none", strokeWidth: 1.5 }}
+              />
+              <circle
+                cx={p.x} cy={p.y} r={Math.max(p.radius, 12)}
+                fill="transparent"
+                className="field-node"
+                tabIndex={0} role="button" aria-label={nodeLabel(p)} aria-pressed={isSelected}
+                style={{ cursor: "pointer", outline: "none" }}
+                onClick={() => setSelected(p)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(p); } }}
+              />
+            </g>
+          );
+        })}
       </svg>
       {selected && (
-        <div className="absolute top-0 right-0 rounded-xl p-3.5" style={{ width: 230, background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
+        <div className="rounded-xl p-3.5 mt-3" style={{ maxWidth: 300, marginLeft: "auto", background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
           <div className="flex items-center justify-between mb-2">
             <span className="sd-mono text-[11px]" style={{ color: COLORS.faint }}>{selected.inc.display_id}</span>
             <button onClick={() => setSelected(null)} aria-label="Close" style={{ color: COLORS.faint, lineHeight: 1, fontSize: 15 }}>&times;</button>
