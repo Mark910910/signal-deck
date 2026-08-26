@@ -728,6 +728,10 @@ function statusColorForPosition(idx, total) {
   return lerpHex(COLORS.blue, COLORS.teal, idx / (total - 1));
 }
 function StatusPill({ name, statusId, statuses }) {
+  // A null/missing status_id (found live on a real incident) previously
+  // rendered as a blank, empty-looking pill — same color logic, no text
+  // inside it — which reads as a rendering bug rather than "no status."
+  if (!name) return null;
   const idx = Array.isArray(statuses) ? statuses.findIndex((s) => s.id === statusId) : -1;
   const total = Array.isArray(statuses) ? statuses.length : 0;
   const c = statusColorForPosition(idx, total);
@@ -1269,7 +1273,7 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
           {savedViews.map((v) => (
             <div key={v.id} className="flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-lg text-xs transition-colors hover:brightness-110" style={{ background: COLORS.surface, border: `1px solid ${COLORS.border}`, color: COLORS.muted }}>
               <button onClick={() => applyView(v)}>{v.name}</button>
-              <button onClick={() => deleteView(v.id)} className="p-0.5"><X size={11} color={COLORS.faint} /></button>
+              <button onClick={() => deleteView(v.id)} className="p-0.5" aria-label="Delete saved view"><X size={11} color={COLORS.faint} /></button>
             </div>
           ))}
         </div>
@@ -1318,7 +1322,7 @@ function IncidentList({ incidents, lookups, org, tick, members, onSelect, initFi
                     )}
                   </>
                 )}
-                <button onClick={() => removeCondition(idx)}><X size={13} color={COLORS.faint} /></button>
+                <button onClick={() => removeCondition(idx)} aria-label="Remove condition"><X size={13} color={COLORS.faint} /></button>
               </div>
             );
           })}
@@ -1727,7 +1731,7 @@ function ChatIntake({ lookups, org, onCreated }) {
       </div>
       <div className="p-3 flex gap-2" style={{ borderTop: `1px solid ${COLORS.border}` }}>
         <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Describe the problem…" className="flex-1 px-3 py-2 rounded-lg text-sm" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}`, color: COLORS.text }} />
-        <button onClick={send} className="px-3 rounded-lg" style={{ background: COLORS.amber }}><Send size={15} color="#1A1200" /></button>
+        <button onClick={send} className="px-3 rounded-lg" style={{ background: COLORS.amber }} aria-label="Send message"><Send size={15} color="#1A1200" /></button>
       </div>
     </div>
   );
@@ -2545,7 +2549,7 @@ function Settings({ org, lookups, incidents, onOrgUpdated, onLookupsChanged, sho
       <CollapsibleSection title="People" icon={Users} defaultOpen={false}>
         <Panel title={getTerm(org, "resolver_groups", "Resolver groups")} icon={Users}>
           {lookups.resolverGroups.map((g) => (
-            <div key={g.id} className="flex items-center justify-between text-sm py-1">{g.name}<button onClick={() => removeItem("resolver_groups", g.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
+            <div key={g.id} className="flex items-center justify-between text-sm py-1">{g.name}<button onClick={() => removeItem("resolver_groups", g.id)} aria-label={`Delete team ${g.name}`}><Trash2 size={13} color={COLORS.faint} /></button></div>
           ))}
           <div className="flex gap-2 mt-2"><input value={newGroup} onChange={(e) => setNewGroup(e.target.value)} className="sd-in5 flex-1" placeholder="New group" /><button onClick={addGroup} className="sd-btn-p6">Add</button></div>
         </Panel>
@@ -2569,7 +2573,7 @@ function Settings({ org, lookups, incidents, onOrgUpdated, onLookupsChanged, sho
                 <option value="">No default team</option>
                 {lookups.resolverGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
               </select>
-              <button onClick={() => removeItem("categories", c.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+              <button onClick={() => removeItem("categories", c.id)} aria-label={`Delete category ${c.name}`}><Trash2 size={13} color={COLORS.faint} /></button>
             </div>
           ))}
           <div className="flex gap-2 mt-2"><input value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="sd-in5 flex-1" placeholder="New category" /><button onClick={addCategory} className="sd-btn-p6">Add</button></div>
@@ -2578,7 +2582,7 @@ function Settings({ org, lookups, incidents, onOrgUpdated, onLookupsChanged, sho
 
         <Panel title="Root cause taxonomy" icon={ScanEye}>
           {lookups.rcaCategories.map((r) => (
-            <div key={r.id} className="flex items-center justify-between text-sm py-1">{r.name}<button onClick={() => removeItem("rca_categories", r.id)}><Trash2 size={13} color={COLORS.faint} /></button></div>
+            <div key={r.id} className="flex items-center justify-between text-sm py-1">{r.name}<button onClick={() => removeItem("rca_categories", r.id)} aria-label={`Delete root cause category ${r.name}`}><Trash2 size={13} color={COLORS.faint} /></button></div>
           ))}
           <div className="flex gap-2 mt-2"><input value={newRca} onChange={(e) => setNewRca(e.target.value)} className="sd-in5 flex-1" placeholder="New RCA category" /><button onClick={addRca} className="sd-btn-p6">Add</button></div>
         </Panel>
@@ -2843,7 +2847,7 @@ function IntegrationsPanel({ org, showToast }) {
                 <span style={{ color: COLORS.text }}>{w.label}</span>
                 <div className="flex gap-2">
                   <button onClick={() => toggleWebhookActive(w)} className="text-xs" style={{ color: w.active ? COLORS.teal : COLORS.faint }}>{w.active ? "Active" : "Paused"}</button>
-                  <button onClick={() => deleteWebhook(w.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+                  <button onClick={() => deleteWebhook(w.id)} aria-label="Delete webhook"><Trash2 size={13} color={COLORS.faint} /></button>
                 </div>
               </div>
               <div className="text-xs sd-mono mt-1" style={{ color: COLORS.faint }}>{w.url}</div>
@@ -2953,7 +2957,7 @@ function AutomationRulesPanel({ org, lookups, showToast }) {
               <span style={{ color: COLORS.text }}>{r.label}</span>
               <div className="flex gap-2">
                 <button onClick={() => toggleActive(r)} className="text-xs" style={{ color: r.active ? COLORS.teal : COLORS.faint }}>{r.active ? "Active" : "Paused"}</button>
-                <button onClick={() => deleteRule(r.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+                <button onClick={() => deleteRule(r.id)} aria-label="Delete automation rule"><Trash2 size={13} color={COLORS.faint} /></button>
               </div>
             </div>
             <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>{describeRule(r)}</div>
@@ -3652,7 +3656,7 @@ function CustomDashboards({ org, lookups, incidents, showToast }) {
               </div>
               <div className="flex gap-2">
                 <button onClick={() => { setEditingChart(c); setShowBuilder(true); }} className="text-xs" style={{ color: COLORS.amber }}>Edit</button>
-                <button onClick={() => deleteChart(c.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+                <button onClick={() => deleteChart(c.id)} aria-label="Delete chart"><Trash2 size={13} color={COLORS.faint} /></button>
               </div>
             </div>
           ))}
@@ -3757,7 +3761,7 @@ function OnCallPanel({ org, lookups, showToast }) {
                 <span style={{ color: COLORS.text }}>{r.resolver_groups?.name}</span>
                 <span className="text-xs ml-2" style={{ color: COLORS.faint }}>{new Date(r.starts_at).toLocaleString()} → {new Date(r.ends_at).toLocaleString()}</span>
               </div>
-              <button onClick={() => deleteRotation(r.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+              <button onClick={() => deleteRotation(r.id)} aria-label="Delete on-call rotation"><Trash2 size={13} color={COLORS.faint} /></button>
             </div>
           ))}
           {rotations.length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No on-call shifts scheduled yet.</p>}
@@ -3794,7 +3798,7 @@ function OnCallPanel({ org, lookups, showToast }) {
                 <span style={{ color: COLORS.text }}>{p.resolver_groups?.name}{p.severities?.name ? ` · ${p.severities.name}` : ""}</span>
                 <div className="flex gap-2">
                   <button onClick={() => togglePolicy(p)} className="text-xs" style={{ color: p.active ? COLORS.teal : COLORS.faint }}>{p.active ? "Active" : "Paused"}</button>
-                  <button onClick={() => deletePolicy(p.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+                  <button onClick={() => deletePolicy(p.id)} aria-label="Delete escalation policy"><Trash2 size={13} color={COLORS.faint} /></button>
                 </div>
               </div>
               <div className="text-xs mt-0.5" style={{ color: COLORS.muted }}>
@@ -3939,7 +3943,7 @@ function CustomFieldsPanel({ org, lookups, onLookupsChanged, showToast }) {
               <span style={{ color: COLORS.text }}>{f.label}</span>
               <span className="text-[11px] ml-2" style={{ color: COLORS.faint }}>{f.field_type}{f.required ? " · required" : ""}</span>
             </div>
-            <button onClick={() => deleteField(f.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+            <button onClick={() => deleteField(f.id)} aria-label="Delete custom field"><Trash2 size={13} color={COLORS.faint} /></button>
           </div>
         ))}
         {(lookups.customFields || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No custom fields yet.</p>}
@@ -4380,7 +4384,7 @@ function ProblemsView({ org, lookups, incidents, showToast, onOpenIncident, onNa
           {(p.problem_incidents || []).map((pi) => (
             <div key={pi.incident_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
               <button onClick={() => onOpenIncident(pi.incident_id)} className="sd-mono text-xs underline" style={{ color: COLORS.muted }}>{pi.incidents?.display_id} — {pi.incidents?.title}</button>
-              <button onClick={() => unlink(p.id, pi.incident_id)}><X size={13} color={COLORS.faint} /></button>
+              <button onClick={() => unlink(p.id, pi.incident_id)} aria-label="Unlink incident"><X size={13} color={COLORS.faint} /></button>
             </div>
           ))}
           {(p.problem_incidents || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No incidents linked yet — link one from its detail page.</p>}
@@ -4563,7 +4567,7 @@ function ServiceCatalogPanel({ org, lookups, onLookupsChanged, showToast }) {
         {(lookups.catalogItems || []).map((c) => (
           <div key={c.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
             <span style={{ color: COLORS.text }}>{c.name}{c.requires_approval ? " · needs approval" : ""}</span>
-            <button onClick={() => removeItem(c.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+            <button onClick={() => removeItem(c.id)} aria-label={`Delete request type ${c.name}`}><Trash2 size={13} color={COLORS.faint} /></button>
           </div>
         ))}
         {(lookups.catalogItems || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No catalog items yet — requests can still be logged freeform without one.</p>}
@@ -4845,7 +4849,7 @@ function AssetDetail({ item, org, lookups, items, onBack, onChanged, onOpenIncid
             <span style={{ color: COLORS.muted }}>
               {r.parent_ci_id === item.id ? `depends on ${r.child?.name}` : `${r.parent?.name} depends on this`}
             </span>
-            <button onClick={() => removeRelationship(r.id)}><X size={13} color={COLORS.faint} /></button>
+            <button onClick={() => removeRelationship(r.id)} aria-label="Remove relationship"><X size={13} color={COLORS.faint} /></button>
           </div>
         ))}
         <div className="flex gap-2 mt-2">
@@ -4902,7 +4906,7 @@ function AffectedCIsPanel({ incident, org, onChanged, showToast }) {
       {linked.map((l) => (
         <div key={l.ci_id} className="flex items-center justify-between text-sm py-1.5" style={{ borderBottom: `1px solid ${COLORS.border}` }}>
           <span style={{ color: COLORS.text }}>{l.configuration_items?.name}</span>
-          <button onClick={() => unlink(l.ci_id)}><X size={13} color={COLORS.faint} /></button>
+          <button onClick={() => unlink(l.ci_id)} aria-label="Unlink asset"><X size={13} color={COLORS.faint} /></button>
         </div>
       ))}
       <div className="flex gap-2 mt-2">
@@ -4942,7 +4946,7 @@ function CITypesPanel({ org, lookups, onLookupsChanged, showToast }) {
         {(lookups.ciTypes || []).map((t) => (
           <div key={t.id} className="flex items-center justify-between text-sm p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
             <span style={{ color: COLORS.text }}>{t.name}{t.is_service ? " · Service" : ""}</span>
-            <button onClick={() => removeType(t.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+            <button onClick={() => removeType(t.id)} aria-label={`Delete asset type ${t.name}`}><Trash2 size={13} color={COLORS.faint} /></button>
           </div>
         ))}
         {(lookups.ciTypes || []).length === 0 && <p className="text-xs" style={{ color: COLORS.faint }}>No asset types yet.</p>}
@@ -5027,7 +5031,7 @@ function AttachmentsPanel({ incident, org, showToast }) {
             <button onClick={() => download(a)} className="truncate underline text-left" style={{ color: COLORS.muted }}>{a.file_name}</button>
             <div className="flex items-center gap-2 shrink-0 ml-2">
               <span className="text-[11px]" style={{ color: COLORS.faint }}>{(a.file_size / 1024).toFixed(0)} KB · {a.uploaded_by_type === "customer" ? "customer" : "staff"}</span>
-              <button onClick={() => remove(a)}><Trash2 size={13} color={COLORS.faint} /></button>
+              <button onClick={() => remove(a)} aria-label={`Delete attachment ${a.file_name}`}><Trash2 size={13} color={COLORS.faint} /></button>
             </div>
           </div>
         ))}
@@ -5143,7 +5147,7 @@ function TimeSpentPanel({ incident, lookups, org, showToast }) {
           {manualLogs.map((l) => (
             <div key={l.id} className="flex items-center justify-between text-xs p-2 rounded-lg" style={{ background: COLORS.surfaceHi, border: `1px solid ${COLORS.border}` }}>
               <span style={{ color: COLORS.muted }}>{l.minutes}m{l.note ? ` — ${l.note}` : ""}</span>
-              <button onClick={() => removeManual(l.id)}><Trash2 size={12} color={COLORS.faint} /></button>
+              <button onClick={() => removeManual(l.id)} aria-label="Delete time log entry"><Trash2 size={12} color={COLORS.faint} /></button>
             </div>
           ))}
         </div>
@@ -5240,7 +5244,7 @@ function SLAPoliciesPanel({ org, lookups, onLookupsChanged, showToast }) {
             </div>
             <div className="flex gap-2">
               <button onClick={() => togglePolicy(p)} className="text-xs" style={{ color: p.active ? COLORS.teal : COLORS.faint }}>{p.active ? "Active" : "Paused"}</button>
-              <button onClick={() => removePolicy(p.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+              <button onClick={() => removePolicy(p.id)} aria-label="Delete SLA policy"><Trash2 size={13} color={COLORS.faint} /></button>
             </div>
           </div>
         ))}
@@ -5571,7 +5575,7 @@ function VendorLinkPanel({ incident, org, onChanged, showToast }) {
                 {copiedVendorId === l.vendor_id ? "Copied" : "Copy link"}
               </button>
             )}
-            <button onClick={() => unlink(l.vendor_id)}><X size={13} color={COLORS.faint} /></button>
+            <button onClick={() => unlink(l.vendor_id)} aria-label="Unlink vendor"><X size={13} color={COLORS.faint} /></button>
           </div>
         </div>
       ))}
@@ -6560,7 +6564,7 @@ function KBArticlesPanel({ org, incidents, showToast }) {
               <span className="text-sm" style={{ color: COLORS.text }}>{a.title}</span>
               <div className="flex gap-2">
                 <button onClick={() => startEdit(a)} className="text-xs" style={{ color: COLORS.amber }}>Edit</button>
-                <button onClick={() => remove(a.id)}><Trash2 size={13} color={COLORS.faint} /></button>
+                <button onClick={() => remove(a.id)} aria-label={`Delete article ${a.title}`}><Trash2 size={13} color={COLORS.faint} /></button>
               </div>
             </div>
             <div className="text-[11px] mt-0.5" style={{ color: COLORS.faint }}>

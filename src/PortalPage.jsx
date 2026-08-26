@@ -168,8 +168,8 @@ export default function PortalPage({ slug }) {
                 {!feedbackGiven[s.id] ? (
                   <div className="flex items-center gap-2">
                     <span className="text-[11px]" style={{ color: COLORS.muted }}>Did this help?</span>
-                    <button onClick={() => giveFeedback(s.id, true)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }}><ThumbsUp size={12} color={COLORS.teal} /></button>
-                    <button onClick={() => giveFeedback(s.id, false)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }}><ThumbsDown size={12} color={COLORS.muted} /></button>
+                    <button onClick={() => giveFeedback(s.id, true)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }} aria-label="Yes, this helped"><ThumbsUp size={12} color={COLORS.teal} /></button>
+                    <button onClick={() => giveFeedback(s.id, false)} className="p-1 rounded" style={{ background: COLORS.surfaceHi }} aria-label="No, this didn't help"><ThumbsDown size={12} color={COLORS.muted} /></button>
                   </div>
                 ) : feedbackGiven[s.id] === "up" ? (
                   <p className="text-[11px]" style={{ color: COLORS.teal }}>Glad that helped!</p>

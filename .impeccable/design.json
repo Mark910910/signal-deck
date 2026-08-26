@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-26T05:50:00Z",
+  "title": "Design System: Signal Deck",
+  "extensions": {
+    "colorMeta": {
+      "deep-signal-navy": { "role": "neutral", "displayName": "Deep Signal Navy", "canonical": "#0A1120", "tonalRamp": ["#121f3a", "#223a6d", "#31539b", "#446dc5", "#7392d3", "#a2b6e2", "#d0dbf0", "#ecf0f9"] },
+      "console-panel": { "role": "neutral", "displayName": "Console Panel", "canonical": "#121B2E", "tonalRamp": ["#162037", "#283c67", "#395693", "#4f71ba", "#7b95cb", "#a7b8dd", "#d3dcee", "#edf0f8"] },
+      "raised-console": { "role": "neutral", "displayName": "Raised Console", "canonical": "#182338", "tonalRamp": ["#172136", "#2b3e64", "#3d598f", "#5475b6", "#7e98c8", "#a9bada", "#d4dded", "#edf1f7"] },
+      "hairline-steel": { "role": "neutral", "displayName": "Hairline Steel", "canonical": "#232F47", "tonalRamp": ["#192233", "#2f3f60", "#435a89", "#5b77ae", "#8499c2", "#adbbd7", "#d6ddeb", "#eef1f7"] },
+      "signal-amber": { "role": "primary", "displayName": "Signal Amber", "canonical": "#F5A623", "tonalRamp": ["#492f03", "#895806", "#c37d09", "#f4a015", "#f7b84f", "#fad08a", "#fce7c4", "#fef5e7"] },
+      "clear-channel-teal": { "role": "secondary", "displayName": "Clear Channel Teal", "canonical": "#2DD4BF", "tonalRamp": ["#0d3f39", "#18776b", "#23a998", "#34d5c1", "#67e0d1", "#99eae0", "#ccf5f0", "#eafbf9"] },
+      "alarm-red": { "role": "secondary", "displayName": "Alarm Red", "canonical": "#F0483E", "tonalRamp": ["#470906", "#85110a", "#bd190f", "#ed281c", "#f25d55", "#f6938d", "#fbc9c6", "#fde9e7"] },
+      "low-signal-blue": { "role": "tertiary", "displayName": "Low-Signal Blue", "canonical": "#6C8CFF", "tonalRamp": ["#00114d", "#001f8f", "#002ccc", "#0a3fff", "#476fff", "#859fff", "#c2cfff", "#e5ebff"] },
+      "caution-yellow": { "role": "tertiary", "displayName": "Caution Yellow", "canonical": "#EAB308", "tonalRamp": ["#4a3903", "#8a6a05", "#c59707", "#f7bf12", "#f9cf4d", "#fbdf89", "#fdefc4", "#fef8e6"] },
+      "pending-violet": { "role": "tertiary", "displayName": "Pending Violet", "canonical": "#A78BFA", "tonalRamp": ["#150349", "#270689", "#3808c4", "#4d14f5", "#794ff7", "#a68afa", "#d2c4fc", "#ece7fe"] },
+      "deck-white": { "role": "neutral", "displayName": "Deck White", "canonical": "#E8ECF3", "tonalRamp": ["#1a2332", "#31415e", "#465d86", "#5e7aab", "#869bc0", "#afbdd5", "#d7deea", "#eef1f6"] },
+      "muted-slate": { "role": "neutral", "displayName": "Muted Slate", "canonical": "#8B96AB", "tonalRamp": ["#20242c", "#3c4453", "#566176", "#717e98", "#959fb2", "#b8bfcc", "#dcdfe5", "#f0f2f4"] },
+      "faint-slate": { "role": "neutral", "displayName": "Faint Slate", "canonical": "#838EA9", "tonalRamp": ["#1f232d", "#3a4254", "#545e78", "#6e7b9b", "#939cb4", "#b7bdcd", "#dbdee6", "#f0f1f5"] },
+      "amber-ink": { "role": "neutral", "displayName": "Amber Ink", "canonical": "#1A1200", "tonalRamp": ["#4d3500", "#8f6300", "#cc8d00", "#ffb40a", "#ffc747", "#ffd985", "#ffecc2", "#fff7e5"] },
+      "pure-white": { "role": "neutral", "displayName": "Pure White", "canonical": "#ffffff", "tonalRamp": ["#262626", "#474747", "#666666", "#858585", "#a3a3a3", "#c2c2c2", "#e0e0e0", "#f2f2f2"] },
+      "modal-scrim": { "role": "neutral", "displayName": "Modal Scrim", "canonical": "rgba(5,8,16,0.9)" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display (Space Grotesk)", "purpose": "Brand wordmark, every panel/section title, every large stat number — not a single hero headline." },
+      "body": { "displayName": "Body (Inter)", "purpose": "Paragraphs, descriptions, form values, everything not a title or a data value." },
+      "mono": { "displayName": "Mono (JetBrains Mono)", "purpose": "Reference IDs, timestamps, tokens, API keys — anything read aloud or copy-pasted exactly." }
+    },
+    "shadows": [
+      { "name": "toast-float", "value": "Tailwind shadow-xl", "purpose": "Bottom-center toast — the one confirmed exception to flat-by-default, used only because this element floats above the whole page." },
+      { "name": "flag-float", "value": "Tailwind shadow-2xl", "purpose": "Top-right ambient notification — same floating-above-the-page justification as toast-float." }
+    ],
+    "motion": [
+      { "name": "sd-flag-in", "value": "translateX(12px)->0, opacity 0->1, 0.25s ease-out", "purpose": "Ambient top-right notification entrance." },
+      { "name": "sd-toast-in", "value": "translateY(8px)->0, opacity 0->1, 0.2s ease-out", "purpose": "Bottom-center toast entrance." },
+      { "name": "sd-pulse", "value": "opacity 1<->0.35, 1.6s ease-in-out infinite", "purpose": "Live/active signal indicator pulse." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single loud, unmistakably-clickable action on a screen.",
+      "html": "<button class=\"ds-btn-primary\">Resolve Incident</button>",
+      "css": ".ds-btn-primary { background: #F5A623; color: #1A1200; font-weight: 600; font-size: 13px; padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer; transition: filter 0.15s; } .ds-btn-primary:hover { filter: brightness(1.08); } .ds-btn-primary:focus-visible { outline: 2px solid #F5A623; outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Every non-primary action, including low-drama destructive ones.",
+      "html": "<button class=\"ds-btn-ghost\">Escalate</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: #F5A623; font-weight: 500; font-size: 12px; padding: 7px 12px; border-radius: 8px; border: 1px solid #232F47; cursor: pointer; transition: border-color 0.15s; } .ds-btn-ghost:hover { border-color: #F5A62399; } .ds-btn-ghost:focus-visible { outline: 2px solid #F5A623; outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Badge (position-gradient)",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Signature component: color is computed from the status's position in the org's own ordered list (blue -> teal, early -> late), never from the status name itself, since statuses are fully org-configurable.",
+      "html": "<span class=\"ds-badge\" style=\"background:#2DD4BF22; color:#2DD4BF; border-color:#2DD4BF55;\">Resolved</span>",
+      "css": ".ds-badge { display: inline-block; font-size: 10px; font-weight: 500; padding: 2px 8px; border-radius: 9999px; border: 1px solid; }"
+    },
+    {
+      "name": "Exception Badge (tinted-badge recipe)",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "The same tinted recipe used for every escalation/practice/awaiting-approval exception badge, just with a different semantic color and label per case.",
+      "html": "<span class=\"ds-badge-exception\">⚡ ESCALATED</span>",
+      "css": ".ds-badge-exception { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 6px; background: #F0483E22; color: #F0483E; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Always one background step lighter than whatever panel contains it.",
+      "html": "<input class=\"ds-input\" placeholder=\"Short summary\" />",
+      "css": ".ds-input { width: 100%; background: #182338; border: 1px solid #232F47; border-radius: 8px; padding: 8px 10px; font-size: 13px; color: #E8ECF3; font-family: Inter, sans-serif; } .ds-input::placeholder { color: #8B96AB; } .ds-input:focus { outline: none; border-color: #F5A62399; } .ds-input:disabled { opacity: 0.5; }"
+    },
+    {
+      "name": "Panel / Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The atomic layout unit — a page is a vertical sequence of these. Flat, never shadowed.",
+      "html": "<div class=\"ds-panel\"><div class=\"ds-panel-title\">Time spent</div><div class=\"ds-panel-body\">Automatic, from status history.</div></div>",
+      "css": ".ds-panel { background: #121B2E; border: 1px solid #232F47; border-radius: 12px; padding: 16px; } .ds-panel-title { font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 14px; color: #E8ECF3; margin-bottom: 8px; } .ds-panel-body { font-family: Inter, sans-serif; font-size: 13px; color: #8B96AB; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Single Signal",
+    "overview": "Named by the author, not user-confirmed — the user declined all three offered North Star options without naming a replacement. Grounded in confirmed, evidence-backed logic: one hue (amber) is allowed to carry weight on any given screen, and every other color already has a specific, claimed meaning rather than existing for decoration. Confirmed mood: calm & restrained. Confirmed component character: tactile and confident. The system reads as a technical operations console: exact monospaced data sits next to plain-language copy, depth comes from stacked flat layers of near-black navy rather than shadow, and the whole thing stays legible and calm while someone is looking at it because something is actually wrong.",
+    "keyCharacteristics": [
+      "One primary accent (amber), used sparingly, never decoratively",
+      "Fully flat — depth is layered background steps plus hairline borders, not shadows",
+      "Every non-neutral hue has one specific, claimed meaning; none are interchangeable",
+      "Monospace for anything a human reads aloud or copies; Inter for everything else"
+    ],
+    "rules": [
+      { "name": "The One Claimed Meaning Rule", "body": "No hue is reused across two unrelated concepts on the same surface. Every existing color already means something specific; introducing a new use for an existing hue recreates a real, previously-shipped ambiguity bug.", "section": "colors" },
+      { "name": "The Tinted Badge Rule", "body": "Every status/severity/exception badge uses the same recipe: color+\"22\" background, color+\"55\" border, solid color text/icon. Never a solid-fill badge; never a plain-bordered one.", "section": "colors" },
+      { "name": "The Read-Aloud Rule", "body": "If a value is something a person might read aloud or copy-paste exactly (an ID, a token, a timestamp), it's set in JetBrains Mono. Everything else is Inter.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Nothing embedded in the page lifts off it. A state that needs to stand out within the page gets a color wash and a colored border, never a shadow or a translate/scale hover lift — reserve an actual shadow for a transient element floating above the whole page (a toast, an ambient notification).", "section": "elevation" },
+      { "name": "The Position Gradient Rule", "body": "Status color is a function of list position (blue to teal, early to late), never a string match on a status name — statuses are fully org-configurable.", "section": "components" }
+    ],
+    "dos": [
+      "Do reserve Signal Amber for the single primary action or a genuinely high-severity/near-breach signal — never decoration.",
+      "Do use the Tinted Badge recipe for any new status/exception indicator, never a solid-fill or plain-outline badge.",
+      "Do set any ID, token, or timestamp in JetBrains Mono.",
+      "Do derive status/severity color from data (position in list, severity rank) rather than hardcoding to a label string."
+    ],
+    "donts": [
+      "Don't add a box-shadow to anything embedded in the page — reserve it for a transient element that genuinely floats above the whole page.",
+      "Don't reuse an existing hue for a new, unrelated meaning — this project has already shipped and fixed the ambiguity bug that causes.",
+      "Don't set body text below Faint Slate (#838EA9) on either Deep Signal Navy or Console Panel — a real WCAG regression was found and fixed here before.",
+      "Don't hardcode a status or category name anywhere in styling logic — both are fully org-configurable per business template."
+    ]
+  }
+}
