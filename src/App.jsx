@@ -1084,28 +1084,36 @@ const FIELD_IDLE_X_AMPLITUDE = 6;
 const FIELD_IDLE_Y_AMPLITUDE = 16;
 const FIELD_DRAG_CLAMP = 48;
 const FIELD_DRAG_THRESHOLD_PX = 4;
+const FIELD_DEFAULT_SCALE = 1;
+const FIELD_MIN_SCALE = 0.6;
+const FIELD_MAX_SCALE = 2.2;
+const FIELD_ZOOM_STEP = 0.15;
+const FIELD_WHEEL_SENSITIVITY = 0.0015;
 
 function IncidentField({ incidents, lookups, org, onOpen }) {
   const [selected, setSelected] = useState(null);
   const [dragging, setDragging] = useState(false);
   const slaTerm = getTerm(org, "sla", "deadline").toLowerCase();
 
+  const stageRef = useRef(null);
   const svgRef = useRef(null);
   const rotationRef = useRef({ ...FIELD_DEFAULT_TILT });
+  const scaleRef = useRef(FIELD_DEFAULT_SCALE);
   const interactedRef = useRef(false);
   const dragStateRef = useRef(null); // { startClientX, startClientY, startRot, isDrag }
   const reducedMotionRef = useRef(typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
-  function applyTilt() {
-    if (svgRef.current) svgRef.current.style.transform = `rotateX(${rotationRef.current.x}deg) rotateY(${rotationRef.current.y}deg)`;
+  function applyTransform() {
+    if (svgRef.current) svgRef.current.style.transform = `scale(${scaleRef.current}) rotateX(${rotationRef.current.x}deg) rotateY(${rotationRef.current.y}deg)`;
   }
 
   // Idle-only ambient sway — a gentle, bounded oscillation (never an
   // ever-incrementing spin) so it can never drift into an edge-on,
-  // unreadable angle on its own. Stops the moment someone actually drags
-  // it, permanently, rather than fighting a hand-chosen angle afterward.
+  // unreadable angle on its own. Stops the moment someone actually drags,
+  // zooms, or clicks a control, permanently, rather than fighting a
+  // hand-chosen view afterward.
   useEffect(() => {
-    applyTilt();
+    applyTransform();
     if (reducedMotionRef.current) return;
     let raf;
     const start = performance.now();
@@ -1116,7 +1124,7 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
           x: FIELD_DEFAULT_TILT.x + Math.sin(t * 0.2) * FIELD_IDLE_X_AMPLITUDE,
           y: FIELD_DEFAULT_TILT.y + Math.sin(t * 0.15) * FIELD_IDLE_Y_AMPLITUDE,
         };
-        applyTilt();
+        applyTransform();
       }
       raf = requestAnimationFrame(tick);
     }
@@ -1140,7 +1148,7 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
           x: Math.max(-FIELD_DRAG_CLAMP, Math.min(FIELD_DRAG_CLAMP, st.startRot.x - dy * 0.4)),
           y: Math.max(-FIELD_DRAG_CLAMP, Math.min(FIELD_DRAG_CLAMP, st.startRot.y + dx * 0.4)),
         };
-        applyTilt();
+        applyTransform();
       }
     }
     function onUp() {
@@ -1153,10 +1161,35 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
     document.addEventListener("pointerup", onUp);
   }
 
-  function resetTilt() {
+  function clampScale(v) {
+    return Math.max(FIELD_MIN_SCALE, Math.min(FIELD_MAX_SCALE, v));
+  }
+
+  function zoomBy(delta) {
+    interactedRef.current = true;
+    scaleRef.current = clampScale(scaleRef.current + delta);
+    applyTransform();
+  }
+
+  // Native (non-passive) listener so preventDefault actually stops the
+  // page from scrolling while the pointer is over the diagram — React's
+  // onWheel can't reliably do that.
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    function onWheel(e) {
+      e.preventDefault();
+      zoomBy(-e.deltaY * FIELD_WHEEL_SENSITIVITY);
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  function resetView() {
     interactedRef.current = false;
     rotationRef.current = { ...FIELD_DEFAULT_TILT };
-    applyTilt();
+    scaleRef.current = FIELD_DEFAULT_SCALE;
+    applyTransform();
   }
 
   const sectors = useMemo(() => {
@@ -1234,16 +1267,19 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
         <span>· dim = quiet 5+ days</span>
         <span>· ring = escalated</span>
         <span className="ml-auto flex items-center gap-2">
-          <span style={{ color: COLORS.faint }}>Drag to rotate</span>
-          <button onClick={resetTilt} className="underline" style={{ color: COLORS.faint }}>Reset view</button>
+          <span style={{ color: COLORS.faint }}>Drag to rotate, scroll to zoom</span>
+          <button onClick={() => zoomBy(-FIELD_ZOOM_STEP)} aria-label="Zoom out" className="rounded-md flex items-center justify-center" style={{ width: 20, height: 20, border: `1px solid ${COLORS.border}`, color: COLORS.faint, fontSize: 13, lineHeight: 1 }}>−</button>
+          <button onClick={() => zoomBy(FIELD_ZOOM_STEP)} aria-label="Zoom in" className="rounded-md flex items-center justify-center" style={{ width: 20, height: 20, border: `1px solid ${COLORS.border}`, color: COLORS.faint, fontSize: 13, lineHeight: 1 }}>+</button>
+          <button onClick={resetView} className="underline" style={{ color: COLORS.faint }}>Reset view</button>
         </span>
       </p>
       <div
-        style={{ perspective: "1000px", touchAction: "none" }}
+        ref={stageRef}
+        style={{ perspective: "1000px", touchAction: "none", overflow: "hidden" }}
         onPointerDown={handlePointerDown}
       >
       <svg ref={svgRef} viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, minWidth: 300, display: "block", margin: "0 auto", cursor: dragging ? "grabbing" : "grab", willChange: "transform" }}
-        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Rendered at an angle — drag to rotate, or use Tab to step through each incident regardless of the current angle.`}>
+        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Rendered at an angle — drag to rotate, scroll or use the zoom buttons to zoom, or use Tab to step through each incident regardless of the current view.`}>
         {["breached", "close", "soon", "later", "calm"].map((b) => (
           <circle key={b} cx={cx} cy={cy} r={FIELD_BANDS[b]} fill="none" stroke={b === "breached" ? COLORS.red : COLORS.border} strokeOpacity={b === "breached" ? 0.4 : 1} strokeWidth="1" />
         ))}
