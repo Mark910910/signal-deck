@@ -1100,7 +1100,10 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
   const rotationRef = useRef({ ...FIELD_DEFAULT_TILT });
   const scaleRef = useRef(FIELD_DEFAULT_SCALE);
   const interactedRef = useRef(false);
-  const dragStateRef = useRef(null); // { startClientX, startClientY, startRot, isDrag }
+  const dragStateRef = useRef(null); // { pointerId, startClientX, startClientY, startRot, isDrag }
+  const pointersRef = useRef(new Map()); // live touch/pointer positions, keyed by pointerId — tracks all fingers down so a second one can turn a drag into a pinch
+  const pinchStateRef = useRef(null); // { startDist, startScale }
+  const pinchOccurredRef = useRef(false); // true from the moment a 2nd finger lands until every finger lifts, so a still finger's own pointerup can't fire a stray node click mid-pinch
   const reducedMotionRef = useRef(typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
 
   function applyTransform() {
@@ -1132,11 +1135,54 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  function pinchDistance() {
+    const pts = [...pointersRef.current.values()];
+    return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+
+  // One finger rotates (same as mouse-drag); a second finger landing
+  // mid-gesture hands off to a pinch instead, so the switch works whether
+  // both fingers touch down together or one arrives slightly after the
+  // other.
   function handlePointerDown(e) {
-    dragStateRef.current = { startClientX: e.clientX, startClientY: e.clientY, startRot: { ...rotationRef.current }, isDrag: false };
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size === 2) {
+      dragStateRef.current = null;
+      setDragging(false);
+      interactedRef.current = true;
+      pinchOccurredRef.current = true;
+      pinchStateRef.current = { startDist: pinchDistance(), startScale: scaleRef.current };
+    } else if (pointersRef.current.size === 1) {
+      dragStateRef.current = { pointerId: e.pointerId, startClientX: e.clientX, startClientY: e.clientY, startRot: { ...rotationRef.current }, isDrag: false };
+    }
+  }
+
+  function clampScale(v) {
+    return Math.max(FIELD_MIN_SCALE, Math.min(FIELD_MAX_SCALE, v));
+  }
+
+  function zoomBy(delta) {
+    interactedRef.current = true;
+    scaleRef.current = clampScale(scaleRef.current + delta);
+    applyTransform();
+  }
+
+  // Persistent (mount-once) listeners rather than per-gesture ones, since
+  // a pinch needs to keep tracking both fingers no matter which one moves.
+  useEffect(() => {
     function onMove(ev) {
+      if (!pointersRef.current.has(ev.pointerId)) return;
+      pointersRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+      if (pinchStateRef.current && pointersRef.current.size === 2) {
+        const ratio = pinchDistance() / pinchStateRef.current.startDist;
+        scaleRef.current = clampScale(pinchStateRef.current.startScale * ratio);
+        applyTransform();
+        return;
+      }
+
       const st = dragStateRef.current;
-      if (!st) return;
+      if (!st || ev.pointerId !== st.pointerId) return;
       const dx = ev.clientX - st.startClientX, dy = ev.clientY - st.startClientY;
       if (!st.isDrag && Math.hypot(dx, dy) > FIELD_DRAG_THRESHOLD_PX) {
         st.isDrag = true;
@@ -1151,25 +1197,24 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
         applyTransform();
       }
     }
-    function onUp() {
-      dragStateRef.current = null;
-      setDragging(false);
-      document.removeEventListener("pointermove", onMove);
-      document.removeEventListener("pointerup", onUp);
+    function onUp(ev) {
+      pointersRef.current.delete(ev.pointerId);
+      if (dragStateRef.current?.pointerId === ev.pointerId) {
+        dragStateRef.current = null;
+        setDragging(false);
+      }
+      if (pointersRef.current.size < 2) pinchStateRef.current = null;
+      if (pointersRef.current.size === 0) pinchOccurredRef.current = false;
     }
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);
-  }
-
-  function clampScale(v) {
-    return Math.max(FIELD_MIN_SCALE, Math.min(FIELD_MAX_SCALE, v));
-  }
-
-  function zoomBy(delta) {
-    interactedRef.current = true;
-    scaleRef.current = clampScale(scaleRef.current + delta);
-    applyTransform();
-  }
+    document.addEventListener("pointercancel", onUp);
+    return () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
 
   // Native (non-passive) listener so preventDefault actually stops the
   // page from scrolling while the pointer is over the diagram — React's
@@ -1267,7 +1312,7 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
         <span>· dim = quiet 5+ days</span>
         <span>· ring = escalated</span>
         <span className="ml-auto flex items-center gap-2">
-          <span style={{ color: COLORS.faint }}>Drag to rotate, scroll to zoom</span>
+          <span style={{ color: COLORS.faint }}>Drag to rotate, pinch or scroll to zoom</span>
           <button onClick={() => zoomBy(-FIELD_ZOOM_STEP)} aria-label="Zoom out" className="rounded-md flex items-center justify-center" style={{ width: 20, height: 20, border: `1px solid ${COLORS.border}`, color: COLORS.faint, fontSize: 13, lineHeight: 1 }}>−</button>
           <button onClick={() => zoomBy(FIELD_ZOOM_STEP)} aria-label="Zoom in" className="rounded-md flex items-center justify-center" style={{ width: 20, height: 20, border: `1px solid ${COLORS.border}`, color: COLORS.faint, fontSize: 13, lineHeight: 1 }}>+</button>
           <button onClick={resetView} className="underline" style={{ color: COLORS.faint }}>Reset view</button>
@@ -1279,7 +1324,7 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
         onPointerDown={handlePointerDown}
       >
       <svg ref={svgRef} viewBox="0 0 600 600" className="w-full" style={{ maxWidth: 460, minWidth: 300, display: "block", margin: "0 auto", cursor: dragging ? "grabbing" : "grab", willChange: "transform" }}
-        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Rendered at an angle — drag to rotate, scroll or use the zoom buttons to zoom, or use Tab to step through each incident regardless of the current view.`}>
+        role="img" aria-label={`Field view of ${incidents.length} open incidents, grouped by team and positioned by time to ${slaTerm}. Rendered at an angle — drag to rotate, pinch, scroll, or use the zoom buttons to zoom, or use Tab to step through each incident regardless of the current view.`}>
         {["breached", "close", "soon", "later", "calm"].map((b) => (
           <circle key={b} cx={cx} cy={cy} r={FIELD_BANDS[b]} fill="none" stroke={b === "breached" ? COLORS.red : COLORS.border} strokeOpacity={b === "breached" ? 0.4 : 1} strokeWidth="1" />
         ))}
@@ -1329,7 +1374,7 @@ function IncidentField({ incidents, lookups, org, onOpen }) {
                 className="field-node"
                 tabIndex={0} role="button" aria-label={nodeLabel(p)} aria-pressed={isSelected}
                 style={{ cursor: "pointer", outline: "none" }}
-                onClick={() => setSelected(p)}
+                onClick={() => { if (!pinchOccurredRef.current) setSelected(p); }}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(p); } }}
               />
             </g>
